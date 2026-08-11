@@ -104,8 +104,13 @@ async def webhook_ycloud(
     Si tardás o devolvés error, YCloud reintenta y terminás procesando el
     mismo mensaje dos veces.
     """
-    if settings.webhook_token and not _token_ok(x_webhook_token, settings.webhook_token):
-        raise HTTPException(status_code=401, detail="token inválido")
+    if settings.webhook_token:
+        # YCloud no permite agregar headers custom en su config de webhook (solo
+        # URL + eventos), así que aceptamos el token TAMBIÉN por query param para
+        # poder incrustarlo en la URL: .../webhook/ycloud?token=EL_TOKEN
+        provisto = x_webhook_token or request.query_params.get("token")
+        if not _token_ok(provisto, settings.webhook_token):
+            raise HTTPException(status_code=401, detail="token inválido")
 
     try:
         body: dict[str, Any] = await request.json()
