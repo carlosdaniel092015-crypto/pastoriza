@@ -84,7 +84,7 @@ PANEL_HTML = r"""<!doctype html>
   .adot{width:7px;height:7px;border-radius:50%;background:var(--senal);flex:none}
   .ttag{font-size:9.5px;color:var(--mut);border:1px solid var(--line);border-radius:3px;padding:0 5px;letter-spacing:.06em}
 
-  .thread{display:flex;flex-direction:column;height:100%;min-width:0}
+  .thread{display:flex;flex-direction:column;height:100%;min-width:0;min-height:0}
   .thead{padding:12px 20px;border-bottom:1px solid var(--line)}
   .thead .row1{display:flex;align-items:flex-start}
   .thead .cn{font-family:var(--mono);font-weight:700;font-size:15px}
@@ -94,7 +94,7 @@ PANEL_HTML = r"""<!doctype html>
   .abtn{background:transparent;border:1px solid var(--line);color:var(--tx);padding:6px 12px;border-radius:var(--r);font-size:12.5px}
   .abtn:hover{border-color:var(--senal)}
   .abtn.mut{color:var(--mut)}
-  .msgs{flex:1;overflow-y:auto;padding:22px 26px;display:flex;flex-direction:column;gap:14px}
+  .msgs{flex:1;min-height:0;overflow-y:auto;padding:22px 26px;display:flex;flex-direction:column;gap:14px}
   .row{display:flex;flex-direction:column;max-width:66%}
   .row.l{align-self:flex-start;align-items:flex-start}
   .row.r{align-self:flex-end;align-items:flex-end}
@@ -112,8 +112,7 @@ PANEL_HTML = r"""<!doctype html>
     text-transform:uppercase;padding:2px 8px;border-radius:3px;margin-bottom:8px}
   .tool{align-self:flex-start;color:var(--mut);font-family:var(--mono);font-size:11px;background:transparent;border:0;padding:0;letter-spacing:.02em}
   .tfoot{padding:11px 20px;border-top:1px solid var(--line);color:var(--mut)}
-  .replyrow{display:none;gap:8px;padding:10px 20px;border-top:1px solid var(--line);background:var(--panel)}
-  .replyrow.on{display:flex}
+  .replyrow{display:flex;gap:8px;padding:10px 20px;border-top:1px solid var(--line);background:var(--panel)}
   .replyrow input{flex:1;background:var(--bg);border:1px solid var(--line);color:var(--tx);padding:9px 12px;border-radius:var(--r)}
   .empty{color:var(--mut);padding:44px 20px;text-align:center;font-size:13px}
 
@@ -389,8 +388,8 @@ async function openChat(id){
       <button class="abtn" onclick="marcarRevision('${id}')">Marcar para revisión</button>
       <button class="abtn mut" onclick="toggleReply()">Responder</button>
       <button class="abtn mut" onclick="exportar('${id}')">Exportar</button>
+      <button class="abtn mut" onclick="eliminarChat('${id}')">Eliminar</button>
     </div>`;
-  $('#replyrow').classList.remove('on');
   // resolver productos para los chips
   const ids=new Set();
   for(const it of curItems){ const c=contenidoStr(it.content); if(c.trim().startsWith('{')){ try{ (JSON.parse(c).mostrar_productos||[]).forEach(x=>ids.add(x)); }catch(e){} } }
@@ -419,9 +418,17 @@ function renderMsgs(items){
 }
 async function toggleBot(id,p){ await api('/chats/'+encodeURIComponent(id)+(p?'/reactivar':'/pausar'),{method:'POST'}); openChat(id); loadChats(); }
 async function marcarRevision(id){ await api('/chats/'+encodeURIComponent(id)+'/revisar',{method:'POST'}); alert('Marcado para revisión.'); loadStats(); }
-function toggleReply(){ $('#replyrow').classList.toggle('on'); const i=$('#rin'); if($('#replyrow').classList.contains('on')&&i)i.focus(); }
+function toggleReply(){ const i=$('#rin'); if(i)i.focus(); }
 async function responder(){ if(!selChat)return; const t=$('#rin').value.trim(); if(!t)return; $('#rin').value='';
   const d=await api('/chats/'+encodeURIComponent(selChat)+'/responder',{method:'POST',body:JSON.stringify({texto:t})}); openChat(selChat); }
+async function eliminarChat(id){
+  if(!confirm('¿Eliminar esta conversación? Se borra el historial del chat y no se puede deshacer.'))return;
+  try{ await api('/chats/'+encodeURIComponent(id),{method:'DELETE'}); }catch(e){ alert('No se pudo eliminar.'); return; }
+  selChat=null;
+  $('#thead').innerHTML='<div class="row1"><div><div class="cn">Elegí una conversación</div></div></div>';
+  $('#msgs').innerHTML='<div class="empty">Selecciona un chat de la izquierda.</div>';
+  loadChats(); loadStats();
+}
 function exportar(id){ const txt=curItems.map(it=>{ let c=contenidoStr(it.content); if(c.trim().startsWith('{')){ try{c=JSON.parse(c).mensaje||c;}catch(e){} } return (it.role||'?')+': '+c; }).join('\n');
   const a=document.createElement('a'); a.href=URL.createObjectURL(new Blob([txt],{type:'text/plain'})); a.download='chat_'+id+'.txt'; a.click(); }
 

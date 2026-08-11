@@ -139,6 +139,17 @@ async def leer_chatmeta(chat_id: str) -> dict:
         return {"chat_id": chat_id, "destino": {"to": chat_id}, "emisor": ""}
 
 
+async def borrar_chatmeta(chat_id: str) -> None:
+    """Quita la conversación del índice del panel (no toca Odoo)."""
+    async def _op(r: Any) -> None:
+        await r.hdel(CHATMETA_KEY, chat_id)
+
+    try:
+        await with_reconnect(_op)
+    except Exception as exc:  # noqa: BLE001
+        log.warning("chatmeta_no_borrado", error=str(exc))
+
+
 async def todos_chatmeta() -> dict[str, dict]:
     async def _op(r: Any) -> dict:
         return await r.hgetall(CHATMETA_KEY)

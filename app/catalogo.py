@@ -83,9 +83,11 @@ class Catalogo:
             t for t in tmpls
             if (t.get("name") or "").strip().upper() not in EXCLUIR_NOMBRES
         ]
-        # Solo publicados (si el campo existe y alguno está publicado).
-        if any(t.get("is_published") is True for t in tmpls):
-            tmpls = [t for t in tmpls if t.get("is_published") is True]
+        # Regla de negocio: SOLO productos PUBLICADOS en Odoo. Si el admin no lo
+        # publicó, no se le muestra al cliente (además, los no publicados no suelen
+        # tener imagen). Estricto: un no-publicado nunca aparece (antes, si NINGUNO
+        # estaba publicado, se mostraban todos).
+        tmpls = [t for t in tmpls if t.get("is_published") is True]
 
         if not tmpls:
             return []

@@ -142,6 +142,19 @@ async def api_chat_hilo(
     }
 
 
+@panel_router.delete("/api/chats/{chat_id}")
+async def api_eliminar_chat(
+    chat_id: str, x_panel_token: str | None = Header(default=None)
+) -> dict:
+    """Elimina la conversación del panel: borra el historial (Redis) y la saca del
+    índice de chats. No toca Odoo (clientes/pedidos quedan intactos)."""
+    _auth(x_panel_token)
+    await RedisSession(chat_id).clear_session()
+    await events.borrar_chatmeta(chat_id)
+    log.info("chat_eliminado", chat_id=chat_id)
+    return {"ok": True}
+
+
 @panel_router.get("/api/productos")
 async def api_productos(
     ids: str = "", x_panel_token: str | None = Header(default=None)
