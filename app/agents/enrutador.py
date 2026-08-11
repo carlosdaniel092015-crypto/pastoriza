@@ -38,8 +38,8 @@ RE_CIERRE = re.compile(
 RE_VENTAS = re.compile(
     r"\b(tienen|precio|cu[aá]nto (cuesta|vale|es|sale)|busco|me interesa|"
     r"quiero (comprar|ver|una|un|el|la|los|las|unas|unos)|"
-    r"botella|galon|tarro|frasco|pomo|tapa|envase|atomizador|jarra|vaso|"
-    r"onza|\boz\b|catalogo|producto|disponible)"
+    r"botella|galon|tarro|frasco|pomo|tapa|envase|atomizador|jarra|vaso|pote|"
+    r"onza|\boz\b|catalogo|producto|disponible|vac[ií]o)"
 )
 
 

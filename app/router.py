@@ -51,10 +51,12 @@ RE_ESTADO_PEDIDO = _R(
 )
 RE_ENVIO_RETIRO = _R(r"^(envio o retiro|envio/retiro|envio y retiro)$")
 RE_COTIZAR = _R(r"^(cotizar pedido|cotizar|quiero cotizar|hacer un pedido|hacer pedido)$")
-RE_DIRECCION = _R(r"\b(donde (estan|queda|estan ubicados|los encuentro|es la tienda|"
-                  r"recojo|retiro)|como llego|ubicacion de (la tienda|ustedes)|"
-                  r"direccion de (la tienda|ustedes)|cual es (su|la) direccion|"
-                  r"donde (los )?ubico)\b")
+RE_DIRECCION = _R(r"(donde (estan|estamos|queda|quedan|esta|es la tienda|es el negocio|"
+                  r"los encuentro|recojo|retiro)|"
+                  r"donde[^\n]{0,25}ubicad|(estan|estamos|esta) ubicad|como llego|"
+                  r"ubicacion( de (la tienda|el negocio|ustedes))?|"
+                  r"direccion de (la tienda|el negocio|ustedes)|cual es (su|la) direccion|"
+                  r"donde (los )?ubic)")
 RE_HORARIO = _R(r"\b(horario|a que hora (abren|cierran)|hasta que hora|"
                 r"que hora (abren|cierran)|estan abiertos|dias que abren)\b")
 RE_TELEFONO = _R(r"\b(telefono|numero de contacto|como los llamo|numero de telefono)\b")
@@ -91,12 +93,10 @@ def respuesta_directa(
     if not norm:
         return None
 
-    # Si viene de un anuncio, ni siquiera el saludo es genérico: lo maneja el agente,
-    # que sabe de qué producto se trata.
-    if viene_de_anuncio:
-        return None
+    # Nota: si viene de un anuncio, el SALUDO genérico lo maneja el agente (más abajo),
+    # pero las FAQ de negocio (dirección, horario, cuentas, envío…) SÍ se responden acá.
 
-    # Cualquier cosa que huela a dirección, queja, ubicación o pago -> agente.
+    # Cualquier cosa que huela a dirección DEL CLIENTE, queja, ubicación o pago -> agente.
     if any(r.search(norm) for r in RE_DIRECCION_CLIENTE):
         return None
     if RE_QUEJA_A.search(norm) and RE_QUEJA_B.search(norm):
@@ -149,7 +149,8 @@ def respuesta_directa(
         )
 
     if RE_SALUDO.match(norm):
-        return random.choice(SALUDOS)
+        # Desde un anuncio, el saludo lo da el agente (sabe de qué producto viene).
+        return None if viene_de_anuncio else random.choice(SALUDOS)
 
     if RE_CIERRE.match(norm):
         return random.choice(DESPEDIDAS)
