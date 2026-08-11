@@ -163,6 +163,19 @@ class YCloud:
     async def enviar_imagen(
         self, destino: dict, emisor: str, url: str, caption: str = ""
     ) -> bool:
+        # Si la foto la servimos nosotros (/img, ya en JPG confiable), se manda
+        # directo sin pasar por el proxy externo weserv.
+        if settings.base_url and url.startswith(settings.base_url):
+            ok = await self._post(
+                {
+                    "from": emisor,
+                    **destino,
+                    "type": "image",
+                    "image": {"link": url, "caption": (caption or "")[:1024]},
+                },
+                intentos=3,
+            )
+            return ok is not None
         for cand in self._variantes_proxy(url):
             try:
                 data = await descargar(cand, timeout=15.0)

@@ -17,9 +17,10 @@ from typing import Any
 
 from fastapi import BackgroundTasks, Depends, FastAPI, Header, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, Response
 
 from app.media import close_http as close_media_http
+from app.media import convertir_a_jpg, descargar
 
 from app.business_config import (
     config_as_dict,
@@ -227,6 +228,41 @@ async def admin_pausar(chat_id: str, _: None = Depends(require_token)) -> dict:
 async def admin_reactivar(chat_id: str, _: None = Depends(require_token)) -> dict:
     await reactivar_bot(chat_id)
     return {"ok": True}
+
+
+# --------------------------------------------------------------- fotos ---
+_IMG_CACHE: dict[int, bytes] = {}
+
+
+@app.get("/img/{fname}")
+async def serve_img(fname: str) -> Response:
+    """Sirve la foto de un producto ya convertida a JPG, tomándola de Odoo.
+
+    Reemplaza el proxy externo weserv: YCloud busca la imagen acá, en nuestro
+    propio dominio, de forma confiable. Pública (YCloud la fetchea sin token).
+    """
+    try:
+        tmpl_id = int(str(fname).split(".")[0])
+    except ValueError:
+        raise HTTPException(status_code=404, detail="id inválido")
+
+    jpg = _IMG_CACHE.get(tmpl_id)
+    if jpg is None:
+        url = (
+            f"{settings.odoo_url.rstrip('/')}"
+            f"/web/image/product.template/{tmpl_id}/image_1024"
+        )
+        try:
+            jpg = await convertir_a_jpg(await descargar(url))
+        except Exception:  # noqa: BLE001
+            raise HTTPException(status_code=404, detail="sin imagen")
+        _IMG_CACHE[tmpl_id] = jpg
+
+    return Response(
+        content=jpg,
+        media_type="image/jpeg",
+        headers={"Cache-Control": "public, max-age=86400"},
+    )
 
 
 # ------------------------------------------------------------- health ---

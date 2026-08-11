@@ -54,6 +54,10 @@ class Settings(BaseSettings):
     ycloud_api_key: str
     ycloud_base_url: str = "https://api.ycloud.com/v2"
     ycloud_from: str = ""  # número/WABA emisor; si vacío se toma del payload
+    # Dominio público del propio servicio. Se usa para servir las fotos ya
+    # convertidas a JPG (endpoint /img) y que YCloud las tome de acá, sin depender
+    # del proxy externo weserv. Si está vacío, se cae a RAILWAY_PUBLIC_DOMAIN.
+    public_base_url: str = ""
     admin_phone: str = "+18294716701"
     template_alerta_supervisor: str = "alerta_supervisor_cliente"
     template_pedido_creado: str = "notificar_pedido_creado"
@@ -96,6 +100,14 @@ class Settings(BaseSettings):
     @property
     def allowlist(self) -> set[str]:
         return {n.strip() for n in self.allowlist_numeros.split(",") if n.strip()}
+
+    @property
+    def base_url(self) -> str:
+        """URL pública del servicio (sin barra final). Vacío = usar proxy weserv."""
+        if self.public_base_url:
+            return self.public_base_url.rstrip("/")
+        dom = os.environ.get("RAILWAY_PUBLIC_DOMAIN", "").strip()
+        return f"https://{dom}" if dom else ""
 
     def key(self, *parts: str) -> str:
         return self.redis_prefix + ":".join(parts)

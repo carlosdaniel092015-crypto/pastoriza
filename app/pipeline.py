@@ -453,7 +453,10 @@ def _resolver_fotos(
                 tmpl_id=tmpl_id,
             )
             continue
-        out.append((p.image_url, p.resumen()))
+        # Si tenemos dominio público, servimos la foto ya en JPG desde /img
+        # (confiable); si no, la URL de Odoo (webp) + proxy weserv como fallback.
+        url = f"{settings.base_url}/img/{p.tmpl_id}.jpg" if settings.base_url else p.image_url
+        out.append((url, p.resumen()))
     return out
 
 

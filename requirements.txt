@@ -14,6 +14,8 @@ openai>=1.60.0
 redis>=5.2.0
 httpx>=0.27.0
 structlog>=24.4.0
+# Conversión de imágenes de Odoo (webp) a JPG para WhatsApp, sin proxy externo.
+Pillow>=10.0.0
 
 # Dev / tests
 pytest>=8.3.0

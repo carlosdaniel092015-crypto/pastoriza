@@ -5,12 +5,15 @@ y `Describir imagen1`.
 """
 from __future__ import annotations
 
+import asyncio
 import base64
 import json
 import re
+from io import BytesIO
 
 import httpx
 from openai import AsyncOpenAI
+from PIL import Image
 
 from app.logging_conf import get_logger
 from app.settings import settings
@@ -92,6 +95,26 @@ def es_imagen_valida(buf: bytes) -> bool:
     png = buf[0:4] == b"\x89PNG"
     webp = buf[0:4] == b"RIFF" and buf[8:12] == b"WEBP"
     return jpg or png or webp
+
+
+def _a_jpg(data: bytes) -> bytes:
+    """Convierte cualquier imagen (webp/png/…) a JPG con fondo blanco. Síncrono."""
+    img = Image.open(BytesIO(data))
+    if img.mode in ("RGBA", "LA", "P"):
+        img = img.convert("RGBA")
+        fondo = Image.new("RGB", img.size, (255, 255, 255))
+        fondo.paste(img, mask=img.split()[-1])
+        img = fondo
+    else:
+        img = img.convert("RGB")
+    buf = BytesIO()
+    img.save(buf, format="JPEG", quality=85)
+    return buf.getvalue()
+
+
+async def convertir_a_jpg(data: bytes) -> bytes:
+    """Convierte a JPG en un hilo (Pillow es bloqueante)."""
+    return await asyncio.to_thread(_a_jpg, data)
 
 
 async def transcribir_audio(url: str) -> str:
