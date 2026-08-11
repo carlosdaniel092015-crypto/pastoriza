@@ -15,12 +15,37 @@ import json
 import time
 from dataclasses import asdict
 
+from redis.exceptions import ConnectionError as RedisConnectionError
+from redis.exceptions import TimeoutError as RedisTimeoutError
+
 from app.logging_conf import get_logger
 from app.models import InboundMessage
 from app.redis_client import get_redis
 from app.settings import settings
 
 log = get_logger(__name__)
+
+
+def _k_dedup(message_id: str) -> str:
+    return settings.key("dedup", message_id)
+
+
+async def es_duplicado(msg: InboundMessage) -> bool:
+    """True si este message_id ya se había recibido (reintento del webhook de YCloud
+    o doble entrega). SET NX atómico: solo la PRIMERA entrega gana; las demás se
+    ignoran, evitando que el bot responda el mismo mensaje dos veces.
+    """
+    if not msg.message_id:
+        return False
+    key = _k_dedup(msg.message_id)
+    ttl = int(settings.debounce_max_wait + 600)
+    try:
+        nuevo = await get_redis().set(key, "1", nx=True, ex=ttl)
+    except (RedisConnectionError, RedisTimeoutError, OSError):
+        # Ante un blip de Redis, no bloqueamos: mejor arriesgar un duplicado raro
+        # que tragar un mensaje legítimo.
+        return False
+    return not nuevo  # nuevo=True -> primera vez; None -> ya existía -> duplicado
 
 
 def _k_buffer(chat_id: str) -> str:

@@ -18,7 +18,7 @@ from app.agents import ESPECIALISTAS, RespuestaBot, elegir_agente
 from app.business_config import get_producto_de_anuncio, load_config
 from app.catalogo import catalogo
 from app.context import ConversationContext
-from app.debounce import acumular, drenar, esperar_turno
+from app.debounce import acumular, drenar, es_duplicado, esperar_turno
 from app.estado import (
     bot_global_apagado,
     bot_pausado,
@@ -77,6 +77,12 @@ async def manejar_entrante(msg: InboundMessage) -> None:
 
     if await bot_pausado(msg.chat_id):
         log.info("bot_pausado_ignorando", chat_id=msg.chat_id)
+        return
+
+    # Dedup: si YCloud reintenta el webhook o entrega el mismo mensaje dos veces,
+    # lo procesamos UNA sola vez (si no, el bot responde duplicado).
+    if await es_duplicado(msg):
+        log.info("webhook_duplicado_ignorado", chat_id=msg.chat_id, message_id=msg.message_id)
         return
 
     await acumular(msg)
