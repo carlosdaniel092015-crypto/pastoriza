@@ -12,12 +12,14 @@ from app.tools.catalogo_tools import (
     buscar_producto,
     detalle_producto,
     link_tienda,
+    listar_catalogo,
 )
 from app.tools.cotizar_tools import cotizar
 from app.tools.odoo_tools import escalar_a_humano
 
 TOOLS = [
     buscar_producto,
+    listar_catalogo,
     detalle_producto,
     buscar_por_foto,
     link_tienda,

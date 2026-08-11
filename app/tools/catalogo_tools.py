@@ -64,6 +64,31 @@ async def buscar_producto(
 
 
 @function_tool
+async def listar_catalogo(ctx: RunContextWrapper[ConversationContext]) -> str:
+    """Devuelve TODO el catálogo como lista de texto (nombre + precio con ITBIS).
+
+    Úsala cuando el cliente pide ver el catálogo completo, "todo lo que venden",
+    "la lista", "qué productos tienen" o "muéstrame todo". Es la forma correcta de
+    responder a eso: NO uses buscar_producto (que solo trae coincidencias).
+    """
+    productos = await catalogo.todos()
+    if not productos:
+        return "No hay productos disponibles en este momento."
+    lineas = "\n".join(
+        f"{i}. {p.nombre} - RD${p.precio_con_itbis:.2f}"
+        for i, p in enumerate(productos, 1)
+    )
+    return (
+        f"CATALOGO_COMPLETO ({len(productos)} productos, precios CON ITBIS):\n"
+        f"{lineas}\n\n"
+        "Preséntalo al cliente TAL CUAL, como lista de texto numerada, con una "
+        "línea inicial cordial. NO pongas ids en mostrar_productos: NO se mandan "
+        "las fotos de todo el catálogo (sería spam). Cierra ofreciendo mostrar la "
+        "foto o cotizar el/los producto(s) que el cliente elija."
+    )
+
+
+@function_tool
 async def detalle_producto(
     ctx: RunContextWrapper[ConversationContext], nombre: str
 ) -> str:
@@ -170,4 +195,10 @@ async def link_tienda(ctx: RunContextWrapper[ConversationContext], nombre: str) 
     return p.shop_url or f"https://{ctx.context.cfg.website}"
 
 
-CATALOGO_TOOLS = [buscar_producto, detalle_producto, buscar_por_foto, link_tienda]
+CATALOGO_TOOLS = [
+    buscar_producto,
+    listar_catalogo,
+    detalle_producto,
+    buscar_por_foto,
+    link_tienda,
+]

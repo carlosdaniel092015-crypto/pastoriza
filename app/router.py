@@ -14,8 +14,8 @@ from app.matching import quitar_tildes
 
 SALUDOS = [
     "Hola! Soy Michelle de Pastoriza Plastics. En que te puedo ayudar hoy?",
-    "Buenas! Que envase o producto andas buscando?",
-    "Hola! Con gusto te ayudo. Dime que necesitas.",
+    "Hola! Soy Michelle, de Pastoriza Plastics. Que envase o producto andas buscando?",
+    "Hola! Soy Michelle de Pastoriza Plastics. Con gusto te ayudo, dime que necesitas.",
 ]
 DESPEDIDAS = [
     "A ti! Cualquier cosa por aqui estoy.",
