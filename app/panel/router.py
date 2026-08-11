@@ -57,7 +57,9 @@ def _auth(token: str | None) -> None:
 @panel_router.get("/", response_class=HTMLResponse)
 async def panel_home() -> HTMLResponse:
     # La página es pública; los datos (APIs) sí piden token.
-    return HTMLResponse(PANEL_HTML)
+    # no-store: el navegador no cachea el panel, así cada deploy se ve al instante
+    # sin tener que forzar la recarga.
+    return HTMLResponse(PANEL_HTML, headers={"Cache-Control": "no-store"})
 
 
 @panel_router.get("/api/whoami")

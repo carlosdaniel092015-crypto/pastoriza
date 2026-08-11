@@ -31,7 +31,11 @@ async def buscar_producto(
             "galones", "botellon sin tapa".
     """
     c = ctx.context
-    veredicto, productos = await catalogo.buscar(busqueda)
+    # limite alto: si el cliente pide una MEDIDA ("las de 12 oz"), queremos TODOS
+    # los publicados de esa medida, no solo los primeros 5.
+    veredicto, productos = await catalogo.buscar(
+        busqueda, limite=settings.max_imagenes_por_mensaje
+    )
     c.ofrecer(productos)
 
     if veredicto == "match_fuerte":

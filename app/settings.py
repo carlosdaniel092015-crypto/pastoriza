@@ -73,7 +73,9 @@ class Settings(BaseSettings):
     precios_guardados_con_itbis: bool = True
     itbis_rate: float = 0.18
     catalogo_cache_seconds: int = 300
-    max_imagenes_por_mensaje: int = 5
+    # Tope de fotos por respuesta. Alto para poder mostrar TODOS los envases de una
+    # medida (ej. "las de 12 oz") cuando el cliente pide ver esa categoría.
+    max_imagenes_por_mensaje: int = 10
 
     # Si el supervisor le escribe al cliente desde YCloud, pausar el bot 30 min
     # para ese cliente (toma de control). Se apoya en whatsapp.message.updated.
