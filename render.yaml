@@ -1,0 +1,57 @@
+# Render Blueprint — despliega el bot como servicio Docker persistente.
+# En Render: New > Blueprint > conectá este repo. Render lee este archivo y crea
+# el servicio. Los secretos (sync: false) los pegás UNA vez en el panel del
+# servicio, en Environment — NUNCA van en el repo.
+#
+# Doc: https://render.com/docs/blueprint-spec
+services:
+  - type: web
+    name: pastoriza-bot
+    runtime: docker
+    dockerfilePath: ./Dockerfile
+    # 'starter' = instancia SIEMPRE encendida (~US$7/mes). NO uses 'free': se
+    # apaga tras 15 min de inactividad y mataría el debounce (igual que Vercel).
+    plan: starter
+    region: ohio            # US East (lo más cercano a Rep. Dominicana)
+    healthCheckPath: /health
+    autoDeploy: true        # cada push a main redepliega
+    envVars:
+      # --- Render enruta a este puerto (el Dockerfile escucha en 8000) ---
+      - key: PORT
+        value: "8000"
+      - key: APP_ENV
+        value: production
+
+      # --- Config NO secreta (puede ir en el repo) ---
+      - key: ODOO_URL
+        value: https://pastorizaplastic.net
+      - key: ODOO_DB
+        value: pastoriza-plastics
+      - key: ODOO_UID_FALLBACK
+        value: "2"
+      - key: ODOO_COUNTRY_ID
+        value: "61"
+      - key: REDIS_PREFIX
+        value: "pastoriza:"
+      - key: ADMIN_PHONE
+        value: "+18294716701"
+
+      # --- SECRETOS: pegalos en el panel de Render (Environment). ROTADOS. ---
+      - key: OPENAI_API_KEY
+        sync: false
+      - key: YCLOUD_API_KEY
+        sync: false
+      - key: ODOO_USER
+        sync: false
+      - key: ODOO_PASSWORD
+        sync: false
+      - key: REDIS_URL
+        sync: false
+      - key: WEBHOOK_TOKEN
+        sync: false
+      - key: PANEL_TOKEN
+        sync: false
+      - key: TELEGRAM_BOT_TOKEN
+        sync: false
+      - key: TELEGRAM_CHAT_ID
+        sync: false
