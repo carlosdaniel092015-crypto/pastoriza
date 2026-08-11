@@ -293,6 +293,20 @@ async def procesar_turno(trigger: InboundMessage) -> None:
         )
         if not ad_producto:
             ctx.marcar_revision(f"anuncio_sin_mapear:{ad_id}")
+            # Opción B: si el anuncio no está mapeado pero el referral trae la imagen
+            # del anuncio, la analizamos con visión para saber qué envase muestra y
+            # que el agente entienda "ese modelo" sin preguntar.
+            ad_img = str(referral.get("image_url", "") or "")
+            if ad_img:
+                try:
+                    desc, _ = await analizar_imagen(ad_img)
+                    if desc:
+                        ctx.ad_descripcion = desc[:600]
+                        log.info("anuncio_imagen_analizada", chat_id=chat_id, ad_id=ad_id)
+                except Exception as exc:  # noqa: BLE001
+                    log.warning("anuncio_imagen_fallo", chat_id=chat_id, error=str(exc))
+            else:
+                log.info("anuncio_sin_imagen_en_referral", chat_id=chat_id, ad_id=ad_id)
 
     # ------- anti-frustración / anti-abuso: 3ra vez lo mismo -> supervisor -------
     reps = await contar_repeticion(chat_id, texto)
@@ -338,7 +352,8 @@ async def procesar_turno(trigger: InboundMessage) -> None:
         await panel_events.tocar_chatmeta(
             chat_id, emisor=emisor, destino=destino,
             user_name=ctx.user_name, telefono=ctx.telefono or "", ultimo=texto,
-            ad_id=ctx.ad_id, ad_headline=ctx.ad_headline, ad_producto=ctx.ad_producto_nombre,
+            ad_id=ctx.ad_id, ad_headline=ctx.ad_headline,
+            ad_producto=ctx.ad_producto_nombre or ctx.ad_descripcion.replace("\n", " ")[:140],
         )
         await panel_events.publicar(
             "turn", chat_id, user_name=ctx.user_name, texto=texto,

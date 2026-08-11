@@ -79,6 +79,14 @@ Pago contra entrega: {"NO se acepta" if str(cfg.contra_entrega).strip().lower() 
                 f"(id={c.ad_producto_tmpl_id}). Arranca por ahí: confírmalo por su "
                 "nombre y muestra su foto."
             )
+        elif c.ad_descripcion:
+            bloque.append(
+                f"La IMAGEN del anuncio muestra: {c.ad_descripcion}\n"
+                "Usa esa descripción + buscar_producto para identificar en nuestro "
+                "catálogo el/los envase(s) del anuncio y arranca por ahí. Si el cliente "
+                "dice 'ese modelo', 'ese' o 'el del anuncio', se refiere a eso; NO le "
+                "preguntes qué vio (ya lo sabes por la imagen)."
+            )
         else:
             bloque.append(
                 "No hay producto mapeado a este anuncio. Pregunta de forma natural "

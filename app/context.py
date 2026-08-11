@@ -29,6 +29,7 @@ class ConversationContext:
     ad_headline: str = ""
     ad_producto_tmpl_id: int | None = None
     ad_producto_nombre: str = ""
+    ad_descripcion: str = ""  # qué muestra la IMAGEN del anuncio (visión), si no está mapeado
 
     # --- media del turno ---
     imagen_url: str = ""
