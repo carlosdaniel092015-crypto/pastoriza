@@ -26,8 +26,11 @@ SEQ_KEY = settings.key("panel", "seq")
 CHATMETA_KEY = settings.key("panel", "chatmeta")
 MAX_EVENTS = 1000
 
-# Tipos que se consideran alerta (badge en el panel + Telegram).
-KINDS_ALERTA = {"error", "handoff", "revision", "comprobante_sin_pedido"}
+# Qué eventos disparan una notificación por TELEGRAM. Solo FALLOS técnicos.
+# Las alertas de MEJORA (sugerencias del bot) las notifica el analista aparte
+# (app/panel/analista.py). El resto (handoff, revision, etc.) sigue en el panel
+# pero NO satura Telegram.
+KINDS_TELEGRAM = {"error"}
 
 
 async def publicar(kind: str, chat_id: str, **data: Any) -> dict:
@@ -53,7 +56,7 @@ async def publicar(kind: str, chat_id: str, **data: Any) -> dict:
 
     await run_write(_push)  # 1 intento: no duplicar eventos
 
-    if kind in KINDS_ALERTA:
+    if kind in KINDS_TELEGRAM:
         await _notificar(evt)
     return evt
 
