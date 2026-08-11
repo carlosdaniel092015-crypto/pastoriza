@@ -55,6 +55,13 @@ class BusinessConfig:
         "BLANCO. Costo de envio: RD$550. Gran Santo Domingo aprox 48 horas habiles; "
         "Interior minimo 3 dias habiles."
     )
+    # Pago y mínimos
+    monto_minimo: str = "1000"  # pedido mínimo en RD$
+    formas_pago: str = "Tarjetas de credito, transferencia, depositos y pago en efectivo"
+    contra_entrega: str = "No"  # ¿se acepta pago contra entrega? No
+    # Venta por fardo (OPCIONAL: dejar vacío hasta que el cliente confirme los datos)
+    fardo_cantidad: str = ""  # unidades por fardo
+    fardo_envio_minimo: str = ""  # envío mínimo por fardo
 
     @property
     def precio_envio_num(self) -> float:

@@ -94,6 +94,8 @@ PANEL_HTML = r"""<!doctype html>
   .abtn{background:transparent;border:1px solid var(--line);color:var(--tx);padding:6px 12px;border-radius:var(--r);font-size:12.5px}
   .abtn:hover{border-color:var(--senal)}
   .abtn.mut{color:var(--mut)}
+  .adbanner{margin-top:9px;font-size:12px;color:var(--cinta);background:rgba(217,185,92,.08);
+    border:1px solid var(--line);border-left:3px solid var(--cinta);border-radius:var(--r);padding:6px 11px}
   .msgs{flex:1;min-height:0;overflow-y:auto;padding:22px 26px;display:flex;flex-direction:column;gap:14px}
   .row{display:flex;flex-direction:column;max-width:66%}
   .row.l{align-self:flex-start;align-items:flex-start}
@@ -383,6 +385,7 @@ async function openChat(id){
   const hoy=new Date().toLocaleDateString('es-DO',{day:'2-digit',month:'long'}).toUpperCase();
   $('#thead').innerHTML=`<div class="row1"><div><div class="cn">${esc(m.user_name)||esc(id)}</div><div class="cs">${esc(canal)}</div></div>
     <div class="date eyebrow">Hoy · ${hoy}</div></div>
+    ${m.ad_id?`<div class="adbanner">📣 Vino del anuncio de Facebook${m.ad_producto?': '+esc(m.ad_producto):(m.ad_headline?': '+esc(m.ad_headline):'')} · ID ${esc(m.ad_id)}</div>`:''}
     <div class="acts">
       <button class="abtn" onclick="toggleBot('${id}',${d.pausado})">${d.pausado?'Reactivar bot':'Pausar para este cliente'}</button>
       <button class="abtn" onclick="marcarRevision('${id}')">Marcar para revisión</button>
@@ -485,8 +488,8 @@ function copiarError(id){ const e=alerts.find(x=>x.id===id); if(!e)return; const
   navigator.clipboard.writeText(rep).then(()=>{const b=event.target,t=b.textContent;b.textContent='✓ Copiado';setTimeout(()=>b.textContent=t,2000);}).catch(()=>alert('Copia manual.')); }
 
 // config
-const GRUPOS=[{t:'Envío y entrega',s:'Costo, días y notas de envío.',campos:['precio_envio','dias_envio','hora_corte','nota_envio','info_envio']},{t:'Pagos',s:'Cuentas para transferencia y mensaje de comprobante.',campos:['banco1_nombre','banco1_cuenta','banco2_nombre','banco2_cuenta','titular','cedula','msg_comprobante']},{t:'Negocio',s:'Datos de la tienda.',campos:['direccion','telefono','horario_tienda','website','maps_url']},{t:'Mensajes del bot',s:'Notas y frases que usa el bot.',campos:['nota_botellon','nota_stock','msg_escalar']}];
-const LBL={precio_envio:'Precio de envío',dias_envio:'Días de entrega',hora_corte:'Hora de corte',nota_envio:'Notas de envío',info_envio:'Info de envío',banco1_nombre:'Banco',banco1_cuenta:'Número de cuenta',banco2_nombre:'Banco 2',banco2_cuenta:'Número de cuenta 2',titular:'Titular',cedula:'RNC',msg_comprobante:'Mensaje de comprobante',direccion:'Dirección',telefono:'Teléfono',horario_tienda:'Horario',website:'Website',maps_url:'Enlace de Maps',nota_botellon:'Nota de botellón',nota_stock:'Cuando no hay stock',msg_escalar:'Cuando pasa a un asesor'};
+const GRUPOS=[{t:'Envío y entrega',s:'Costo, días y notas de envío.',campos:['precio_envio','dias_envio','hora_corte','nota_envio','info_envio']},{t:'Pagos',s:'Formas de pago, mínimo, cuentas y comprobante.',campos:['monto_minimo','formas_pago','contra_entrega','banco1_nombre','banco1_cuenta','banco2_nombre','banco2_cuenta','titular','cedula','msg_comprobante']},{t:'Negocio',s:'Datos de la tienda.',campos:['direccion','telefono','horario_tienda','website','maps_url']},{t:'Venta por fardo (opcional)',s:'Déjalo vacío hasta confirmar cantidad por fardo y su envío mínimo.',campos:['fardo_cantidad','fardo_envio_minimo']},{t:'Mensajes del bot',s:'Notas y frases que usa el bot.',campos:['nota_botellon','nota_stock','msg_escalar']}];
+const LBL={precio_envio:'Precio de envío',dias_envio:'Días de entrega',hora_corte:'Hora de corte',nota_envio:'Notas de envío',info_envio:'Info de envío',banco1_nombre:'Banco',banco1_cuenta:'Número de cuenta',banco2_nombre:'Banco 2',banco2_cuenta:'Número de cuenta 2',titular:'Titular',cedula:'RNC',msg_comprobante:'Mensaje de comprobante',direccion:'Dirección',telefono:'Teléfono',horario_tienda:'Horario',website:'Website',maps_url:'Enlace de Maps',nota_botellon:'Nota de botellón',nota_stock:'Cuando no hay stock',msg_escalar:'Cuando pasa a un asesor',monto_minimo:'Pedido mínimo (RD$)',formas_pago:'Formas de pago',contra_entrega:'¿Pago contra entrega?',fardo_cantidad:'Unidades por fardo',fardo_envio_minimo:'Envío mínimo por fardo'};
 const HINTS={precio_envio:'En el chat: "El envío dentro del Gran Santo Domingo son RD$ …"',hora_corte:'Después de esa hora el pedido sale al día siguiente.',msg_comprobante:'Se envía justo después de dar la cuenta.',msg_escalar:'En el chat aparece antes de "Pasado a un asesor".'};
 let cfgDirty=0;
 async function loadCfg(){ const d=await api('/config'); cfgDirty=0;

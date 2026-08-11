@@ -106,7 +106,18 @@ async def tocar_chatmeta(
     user_name: str = "",
     telefono: str = "",
     ultimo: str = "",
+    ad_id: str = "",
+    ad_headline: str = "",
+    ad_producto: str = "",
 ) -> None:
+    # La info del anuncio se setea en el primer mensaje (referral); en los turnos
+    # siguientes no llega, así que la preservamos leyendo la meta previa.
+    if not ad_id:
+        prev = await leer_chatmeta(chat_id)
+        ad_id = prev.get("ad_id", "") or ""
+        ad_headline = ad_headline or prev.get("ad_headline", "") or ""
+        ad_producto = ad_producto or prev.get("ad_producto", "") or ""
+
     meta = {
         "chat_id": chat_id,
         "emisor": emisor,
@@ -115,6 +126,9 @@ async def tocar_chatmeta(
         "telefono": telefono,
         "ultimo": ultimo[:200],
         "ultimo_ts": time.time(),
+        "ad_id": ad_id,
+        "ad_headline": ad_headline,
+        "ad_producto": ad_producto,
     }
 
     async def _op(r: Any) -> None:

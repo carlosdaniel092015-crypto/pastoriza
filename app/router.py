@@ -123,11 +123,13 @@ def respuesta_directa(
 
     if RE_CUENTAS.search(norm):
         return (
-            f"Puedes transferir a cualquiera de estas cuentas:\n\n"
+            f"Formas de pago: {cfg.formas_pago}.\n"
+            f"Pedido minimo: RD${cfg.monto_minimo}.\n\n"
+            f"Para transferencia o deposito:\n"
             f"{cfg.banco1_nombre} - Cta {cfg.banco1_cuenta}\n"
             f"{cfg.banco2_nombre} - Cta {cfg.banco2_cuenta}\n"
             f"({cfg.titular}, {cfg.cedula})\n\n"
-            "Cuando transfieras, enviame la foto del comprobante y te confirmo el pedido."
+            "Cuando pagues, enviame la foto del comprobante y te confirmo el pedido."
         )
 
     if RE_DIRECCION.search(norm):

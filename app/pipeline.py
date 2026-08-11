@@ -338,6 +338,7 @@ async def procesar_turno(trigger: InboundMessage) -> None:
         await panel_events.tocar_chatmeta(
             chat_id, emisor=emisor, destino=destino,
             user_name=ctx.user_name, telefono=ctx.telefono or "", ultimo=texto,
+            ad_id=ctx.ad_id, ad_headline=ctx.ad_headline, ad_producto=ctx.ad_producto_nombre,
         )
         await panel_events.publicar(
             "turn", chat_id, user_name=ctx.user_name, texto=texto,

@@ -50,8 +50,20 @@ Si no tienes un dato: "Para esa información contáctanos al +1 829 471-6701."
 # CUENTAS PARA TRANSFERENCIA (mostrarlas sólo tras confirmar el pedido)
 {cfg.banco1_nombre} - Cta {cfg.banco1_cuenta}
 {cfg.banco2_nombre} - Cta {cfg.banco2_cuenta}
-({cfg.titular}, {cfg.cedula})"""
+({cfg.titular}, {cfg.cedula})
+
+# PAGO Y MÍNIMO (regla de negocio)
+Pedido MÍNIMO: RD${cfg.monto_minimo}. Si el total no llega, díselo con amabilidad
+y ofrece sumar más unidades o productos hasta alcanzarlo.
+Formas de pago: {cfg.formas_pago}.
+Pago contra entrega: {"NO se acepta" if str(cfg.contra_entrega).strip().lower() in ("no", "false", "0", "") else cfg.contra_entrega}."""
     ]
+
+    if str(cfg.fardo_cantidad).strip():
+        partes.append(
+            f"# VENTA POR FARDO\nTambién se vende por fardo de {cfg.fardo_cantidad} "
+            f"unidades. Envío mínimo por fardo: {cfg.fardo_envio_minimo or 'consultar'}."
+        )
 
     if c.ad_id:
         bloque = [
