@@ -1,0 +1,13 @@
+.env
+.git
+.venv
+venv
+__pycache__
+.pytest_cache
+.ruff_cache
+tests
+*.md
+*.log
+# …pero los prompts de los agentes SÍ deben entrar a la imagen:
+!prompts
+!prompts/*.md

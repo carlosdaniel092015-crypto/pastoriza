@@ -1,0 +1,53 @@
+# Compose para Dokploy (o docker compose a secas).
+#
+# En Dokploy, si creás la app como "Compose", pegá este archivo y cargá las
+# variables en la pestaña Environment. Traefik ya viene con Dokploy: sólo
+# asignás el dominio desde la UI y él pone las labels.
+#
+# El servicio `redis` está comentado: ya tenés uno corriendo para n8n.
+# Reusalo con REDIS_URL apuntando a él y un REDIS_PREFIX distinto.
+
+services:
+  bot:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: pastoriza-bot
+    restart: unless-stopped
+    env_file:
+      - .env
+    ports:
+      # Sólo expuesto en localhost: el tráfico entra por Traefik o por el
+      # Cloudflare Tunnel. Nunca abras esto a 0.0.0.0 en el VPS.
+      - "127.0.0.1:8000:8000"
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+    logging:
+      driver: json-file
+      options:
+        max-size: "20m"
+        max-file: "5"
+    networks:
+      - dokploy-network
+
+  # Descomentá SOLO si querés un Redis dedicado en vez de reusar el de n8n.
+  # redis:
+  #   image: redis:7-alpine
+  #   container_name: pastoriza-redis
+  #   restart: unless-stopped
+  #   command: redis-server --appendonly yes --maxmemory 256mb --maxmemory-policy noeviction
+  #   volumes:
+  #     - redis-data:/data
+  #   networks:
+  #     - dokploy-network
+
+# volumes:
+#   redis-data:
+
+networks:
+  dokploy-network:
+    external: true

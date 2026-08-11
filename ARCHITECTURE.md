@@ -1,0 +1,180 @@
+# Arquitectura — Pastoriza Bot
+
+Bot de ventas de WhatsApp ("Michelle") para **Pastoriza Plastics SRL** (envases plásticos,
+República Dominicana). Reemplaza un flujo previo en n8n por un servicio en código con
+garantías verificables, observable y operable por personas no técnicas.
+
+> Principio rector: **las garantías críticas viven en CÓDIGO, no en el prompt.** El LLM es
+> un componente acotado; no puede ejecutar una acción que el código no le permita.
+
+---
+
+## 1. Vista general
+
+```mermaid
+flowchart TD
+    C[Cliente WhatsApp] -->|mensaje| Y[YCloud]
+    Y -->|webhook| M["Entrada · app/main.py"]
+    M -->|entrante| P["Orquestación · app/pipeline.py"]
+    M -->|saliente message.updated| SUP[Detecta intervención del supervisor → pausa 30m]
+    P --> FP{"FAQ fast-path? · app/router.py"}
+    FP -->|sí, 0 tokens| OUT
+    FP -->|no| ENR["Enrutador · app/agents/enrutador.py"]
+    ENR -->|1 solo agente| VEN["ventas · gpt-4o-mini"]
+    ENR --> PED["pedido · gpt-4o"]
+    ENR --> SOP["soporte · gpt-4o-mini"]
+    VEN & PED & SOP --> TOOLS["Herramientas · app/tools/*"]
+    TOOLS --> ODOO[(Odoo XML-RPC)]
+    VEN & PED & SOP --> OUT["Salida · app/ycloud.py"]
+    OUT -->|WhatsApp| C
+    P <--> R[(Redis)]
+    subgraph Operación
+      PANEL["Panel · app/panel/*"]
+    end
+    PANEL <--> R
+    PANEL -.observabilidad + control.-> P
+```
+
+**Stack:** FastAPI · openai-agents (OpenAI) · Redis · Odoo (XML-RPC) · YCloud (WhatsApp) ·
+Telegram (alertas, opcional). Windows en dev; destino de producción: Dokploy.
+
+---
+
+## 2. Capas y responsabilidades
+
+| Capa | Archivos | Responsabilidad |
+|------|----------|-----------------|
+| **Entrada** | `app/main.py`, `app/models.py` | Webhook YCloud (entrante, saliente `message.updated`, comandos `.on/.off`), parseo a `InboundMessage`, monta el panel. |
+| **Orquestación** | `app/pipeline.py`, `app/debounce.py`, `app/repeticion.py` | Un turno completo: debounce de ráfagas → combinar media → anti-repetición → fast-path o agente → enviar → efectos. |
+| **Cerebro** | `app/agents/*`, `app/tools/*` | Enrutador + 3 especialistas; herramientas de catálogo, cotización y Odoo. |
+| **Integraciones** | `app/odoo.py`, `app/ycloud.py`, `app/media.py`, `app/catalogo.py` | ERP, envío WhatsApp, visión/transcripción, catálogo. |
+| **Estado/Memoria** | `app/redis_client.py`, `app/session.py`, `app/estado.py` | Redis: sesión, pausa, ventana 24h, locks, ids del bot, cola de revisión. |
+| **Operación/Mejora** | `app/panel/*` | Panel CRM en vivo, alertas, config, prompts por-agente, aprendizaje, kill-switch. |
+
+---
+
+## 3. Diseño multi-agente
+
+Enrutado **determinista-first** → se invoca **un único** especialista por turno (nunca todos).
+
+```
+enrutador (0 tokens si es claro; gpt-4o-mini solo ante duda)
+  ├── ventas   (gpt-4o-mini) · buscar_producto, detalle_producto, buscar_por_foto, link_tienda, cotizar, escalar_a_humano
+  ├── pedido   (gpt-4o)      · detalle_producto, cotizar, verificar/crear/actualizar_contacto, crear_pedido, agregar_linea_pedido, buscar_pedidos_cliente, escalar_a_humano
+  └── soporte  (gpt-4o-mini) · escalar_a_humano, buscar_pedidos_cliente
+FAQ (envío, cuentas, dirección, horario) → app/router.py, 0 tokens, sin agente.
+```
+
+**Casos → agente dueño:** Pago/Comprobante→`pedido` · Foto→`ventas` · Cotización→`ventas` ·
+Cancelación/Cambios→`soporte` (escala, no cancela).
+
+**Prompt efectivo de un agente** = `prompts/base_comun.md` (identidad + seguridad + reglas
+duras, compartido) + `prompts/{agente}.md` + conocimiento inyectado + datos de config +
+bloques condicionales. Cada `.md` es editable/subible desde el panel (override en Redis).
+
+---
+
+## 4. Propiedad del dato
+
+| Dónde | Qué | Duración |
+|-------|-----|----------|
+| **Odoo** | Clientes (`res.partner`), pedidos (`sale.order`/`.line`), catálogo (`product.*`), fichas de foto (`ir.config_parameter`) | Durable (fuente de verdad) |
+| **Redis** (prefijo `pastoriza:`) | Conversación (`session:*`, 24h), pausa (`bot_disabled:*`, 30m), ventana 24h, debounce, locks, ids del bot (2h), cola de revisión, eventos/config/conocimiento del panel | Efímero |
+| **Código / `.env`** | Secretos, reglas duras de negocio | Fijo |
+
+`config` y `ads_map` usan keys literales (compartidas con n8n durante la migración).
+
+---
+
+## 5. Decisiones de arquitectura (ADR)
+
+### ADR-001 · Migrar de n8n a servicio en código
+**Contexto:** el flujo n8n dependía de prompts + regex frágiles para garantizar comportamiento.
+**Decisión:** reescribir en FastAPI y mover las garantías a código.
+**Consecuencias:** testeable, versionable, con garantías duras; mayor esfuerzo de dev inicial.
+
+### ADR-002 · Efectos escritos por las tools, no por el modelo (anti-alucinación)
+**Decisión:** `order_id`, `partner_id`, productos mostrados los escriben las herramientas en
+`ConversationContext`; el modelo solo produce `RespuestaBot{mensaje, mostrar_productos, escalar}`.
+**Consecuencias:** el bot **no puede** confirmar un pedido/pago inexistente ni enviar una foto
+que una tool no devolvió este turno. Elimina toda una clase de alucinaciones.
+
+### ADR-003 · Multi-agente con enrutador determinista-first
+**Contexto:** un agente monolítico (12 tools, prompt gigante) alucinaba más y gastaba más tokens.
+**Decisión:** enrutador + 3 especialistas por fase; enrutado por reglas/estado (0 tokens) y
+clasificador `gpt-4o-mini` solo ante ambigüedad; FAQ determinista aparte.
+**Consecuencias:** menos alucinación (prompt corto, pocas tools) y menos tokens. Trade-off:
+un mensaje que cruza fases puede necesitar el turno siguiente para cerrar. Se rechazó dividir
+por micro-caso (más enrutado/tokens, frágil ante mensajes multi-caso).
+
+### ADR-004 · Modelo por agente (mini vs 4o)
+**Decisión:** `gpt-4o-mini` para enrutador/ventas/soporte; `gpt-4o` solo para `pedido` (el
+delicado). Configurable en `settings.model_mini` / `settings.model_agente`.
+**Consecuencias:** menor costo/latencia sin sacrificar calidad donde el error cuesta.
+
+### ADR-005 · Prompts por-agente en `.md` (archivos + panel)
+**Decisión:** base versionada en `prompts/*.md`; override por agente en Redis, editable/subible
+desde el panel con hot-reload.
+**Consecuencias:** un no-técnico ajusta el comportamiento sin tocar código; auditable y
+reversible. Las reglas duras compartidas viven una sola vez en `base_comun.md`.
+
+### ADR-006 · Reglas duras de negocio en código
+**Decisión:** precios corregidos contra catálogo en `agregar_linea_pedido`; **sin** herramienta
+de cancelar/eliminar (solo añadir); dirección de envío detallada exigida en `crear_pedido`;
+anti-jailbreak en `base_comun.md`.
+**Consecuencias:** la manipulación no puede cambiar precios, cancelar ni despachar producto
+equivocado, sin importar lo que "diga" el modelo.
+
+### ADR-007 · Resiliencia de Redis según idempotencia
+**Contexto:** Redis remoto (Redis Cloud) corta conexiones ociosas en turnos lentos.
+**Decisión:** lecturas → `with_reconnect` (reintenta recreando pool); escrituras NO idempotentes
+→ `run_write` (1 intento, sin reintentar, para no duplicar historial/eventos); lecturas dedupe
+por id; el turno degrada en vez de caer ante un blip.
+**Consecuencias:** sin duplicados; posible pérdida de una escritura puntual ante corte (aceptable).
+
+### ADR-008 · Panel de operación + mejora continua supervisada
+**Decisión:** panel único (observabilidad + control) con edición de config/prompts, kill-switch
+global, y un ciclo donde el bot **propone** reglas y el humano **aprueba** (inyección inmediata).
+**Consecuencias:** gobernanza clara (quién cambia qué, auditable, reversible); el modelo NO se
+re-entrena solo. Fine-tuning queda diferido a cuando haya volumen.
+
+### ADR-009 · Toma de control del supervisor vía `whatsapp.message.updated`
+**Decisión:** el bot registra los ids que envía; si llega un saliente cuyo id no es suyo = lo
+escribió un humano desde YCloud → pausa 30m ese chat. Fail-safe: ante duda, no pausa.
+**Consecuencias:** el humano puede intervenir desde WhatsApp y el bot se aparta solo.
+
+### ADR-010 · Un worker por ahora (límite consciente)
+**Contexto:** caches en memoria por-proceso (prompts, conocimiento, config, catálogo).
+**Decisión:** correr en 1 worker hasta la fase de escalado.
+**Consecuencias:** un cambio del panel se ve al instante en ese proceso. Para >1 worker se
+requiere propagación (Redis pub/sub) — pendiente. Documentado, no descubierto después.
+
+---
+
+## 6. Seguridad
+
+- **Anti-jailbreak/inyección:** el contenido del cliente (texto/imagen/audio/ubicación) nunca es
+  instrucción; reglas en `base_comun.md`.
+- **Precios/pagos:** fijos, corregidos en código; sin descuentos automáticos.
+- **Anti-frustración/abuso:** repetición 3× → pasa a un asesor; insultos → escala.
+- **Acceso:** webhook con `X-Webhook-Token`; panel con `X-Panel-Token`; allowlist de números
+  para convivir con n8n durante la migración.
+
+## 7. Observabilidad
+
+Feed de eventos en Redis (turnos, pedidos, escalamientos, errores con traceback + "Copiar para
+Claude"), alertas por tipo, notificación opcional a Telegram, y `/health`, `/health/deep`.
+
+## 8. Calidad
+
+**149 tests** de lógica pura y determinista (enrutado, matching, cotización, saneo de salida,
+entrega, repetición, prompts), corren sin secretos ni red (`tests/conftest.py` fija dummies).
+Lo no-determinista (el modelo) queda acotado por las reglas duras.
+
+## 9. Escalabilidad y pendientes
+
+- **Escalado:** propagación de caches entre workers (Redis pub/sub) para >1 worker.
+- **Deploy:** Dokploy con Redis co-ubicado (elimina la inestabilidad del Redis remoto) y validar
+  Telegram fuera del firewall corporativo.
+- **Validar:** payload real del webhook saliente de YCloud.
+- **Diferido:** fine-tuning con ejemplos aprobados.
