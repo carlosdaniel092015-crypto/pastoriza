@@ -48,6 +48,9 @@ MSG_TIPO_NO_SOPORTADO = (
     "texto y con gusto te ayudo."
 )
 
+# Sticker/emoji/reacción: inofensivos, no ameritan el mensaje robótico de arriba.
+MSG_LIVIANO = "😊 Con gusto te ayudo. Dime qué envase o producto buscas."
+
 # asyncio sólo guarda una referencia DÉBIL a las tasks: si no las retenemos acá,
 # el recolector puede matar un turno a mitad de la ventana de debounce y el
 # cliente se queda esperando una respuesta que nunca llega.
@@ -227,6 +230,11 @@ async def _combinar(msgs: list[InboundMessage]) -> tuple[str, str, str, bool]:
     texto = "\n".join(p for p in partes if p).strip()
 
     if not texto and otros:
+        # Sticker/emoji/reacción NO es un tipo "no soportado" de verdad: no mandamos
+        # el mensaje robótico. Solo si hay algo realmente no procesable (video, doc…).
+        harmless = {"sticker", "reaction"}
+        if all(m.content_type in harmless for m in otros):
+            return ("", "liviano", "", False)
         return ("", "no_soportado", "", False)
 
     tipo = "image" if imagenes else ("audio" if audios else "text")
@@ -248,6 +256,9 @@ async def procesar_turno(trigger: InboundMessage) -> None:
 
     if tipo == "no_soportado":
         await ycloud.enviar_texto(destino, emisor, MSG_TIPO_NO_SOPORTADO, False)
+        return
+    if tipo == "liviano":
+        await ycloud.enviar_texto(destino, emisor, MSG_LIVIANO, False)
         return
     if not texto:
         log.info("turno_vacio", chat_id=chat_id)
