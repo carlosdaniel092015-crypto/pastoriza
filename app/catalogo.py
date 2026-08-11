@@ -72,7 +72,7 @@ class Catalogo:
         tmpls = await odoo.search_read(
             "product.template",
             [["active", "=", True]],
-            ["id", "name", "list_price", "is_published"],
+            ["id", "name", "list_price", "is_published", "image_128"],
             limit=500,
             order="name asc",
             context=ctx or None,
@@ -83,11 +83,14 @@ class Catalogo:
             t for t in tmpls
             if (t.get("name") or "").strip().upper() not in EXCLUIR_NOMBRES
         ]
-        # Regla de negocio: SOLO productos PUBLICADOS en Odoo. Si el admin no lo
-        # publicó, no se le muestra al cliente (además, los no publicados no suelen
-        # tener imagen). Estricto: un no-publicado nunca aparece (antes, si NINGUNO
-        # estaba publicado, se mostraban todos).
-        tmpls = [t for t in tmpls if t.get("is_published") is True]
+        # Regla de negocio: SOLO productos PUBLICADOS y CON IMAGEN. Si el admin no
+        # lo publicó (no lo quiso) o no tiene foto, no se le muestra al cliente:
+        # casi siempre pide la imagen y no habría forma de dársela.
+        # (image_128 se computa desde la imagen subida; vacío = sin foto real.)
+        tmpls = [
+            t for t in tmpls
+            if t.get("is_published") is True and t.get("image_128")
+        ]
 
         if not tmpls:
             return []
