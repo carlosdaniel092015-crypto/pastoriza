@@ -24,10 +24,13 @@ USER bot
 EXPOSE 8000
 
 HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 \
-    CMD curl -fsS http://localhost:8000/health || exit 1
+    CMD curl -fsS "http://localhost:${PORT:-8000}/health" || exit 1
 
 # UN SOLO WORKER a propósito: el debounce usa tasks de asyncio en memoria.
 # Y por ahora UNA SOLA RÉPLICA (ver ADR-010): las caches en memoria de prompts y
 # conocimiento no se propagan entre procesos; con >1 réplica los cambios del panel
 # solo aplicarían a una. Escalar requiere primero la propagación vía Redis pub/sub.
-CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000", "--workers", "1", "--proxy-headers", "--forwarded-allow-ips", "*"]
+#
+# Puerto: escuchamos en $PORT si el host lo inyecta (Railway/Render/Fly) y en 8000
+# si no (local/Docker). `exec` para que uvicorn sea PID 1 y reciba SIGTERM.
+CMD ["sh", "-c", "exec uvicorn app.main:app --host 0.0.0.0 --port ${PORT:-8000} --workers 1 --proxy-headers --forwarded-allow-ips '*'"]

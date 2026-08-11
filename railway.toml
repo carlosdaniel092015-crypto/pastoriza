@@ -1,0 +1,18 @@
+# Railway — despliega usando el Dockerfile del repo.
+# Los secretos NO van aquí: se cargan en Railway > tu servicio > Variables.
+# Doc: https://docs.railway.com/reference/config-as-code
+
+[build]
+builder = "DOCKERFILE"
+dockerfilePath = "Dockerfile"
+
+[deploy]
+# Railway espera un 200 en esta ruta para dar el deploy por sano.
+healthcheckPath = "/health"
+healthcheckTimeout = 120
+# Si el proceso se cae, reinícialo (reemplaza el "n8n se reinicia solo").
+restartPolicyType = "ON_FAILURE"
+restartPolicyMaxRetries = 3
+# UNA sola réplica a propósito (ADR-010): las caches en memoria no se propagan
+# entre procesos. No subir hasta implementar propagación (Redis pub/sub).
+numReplicas = 1
