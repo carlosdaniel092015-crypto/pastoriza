@@ -10,8 +10,18 @@ PANEL_HTML = r"""<!doctype html>
 <html lang="es">
 <head>
 <meta charset="utf-8"/>
-<meta name="viewport" content="width=device-width, initial-scale=1"/>
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover"/>
 <title>Panel · Pastoriza Bot</title>
+<meta name="description" content="Panel de operación del bot de WhatsApp de Pastoriza Plastics."/>
+<link rel="manifest" href="/panel/manifest.webmanifest"/>
+<meta name="theme-color" content="#16150F"/>
+<meta name="color-scheme" content="dark light"/>
+<link rel="icon" href="/panel/static/favicon.svg" type="image/svg+xml"/>
+<link rel="apple-touch-icon" href="/panel/static/apple-touch-icon.png"/>
+<meta name="mobile-web-app-capable" content="yes"/>
+<meta name="apple-mobile-web-app-capable" content="yes"/>
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent"/>
+<meta name="apple-mobile-web-app-title" content="Pastoriza"/>
 <style>
   :root{
     --bg:#16150F; --panel:#1c1b14; --panel2:#242219; --line:#332f24;
@@ -34,10 +44,17 @@ PANEL_HTML = r"""<!doctype html>
   ::selection{background:var(--senal);color:#fff}
   :focus-visible{outline:2px solid var(--senal);outline-offset:1px}
 
-  .app{display:grid;grid-template-rows:56px 1fr;height:100vh}
+  .app{display:grid;grid-template-rows:56px 1fr;height:100vh;height:100dvh}
 
   /* Header */
-  header{display:flex;align-items:center;gap:18px;padding:0 18px;background:var(--panel);border-bottom:1px solid var(--line)}
+  header{display:flex;align-items:center;gap:18px;padding:0 18px;background:var(--panel);border-bottom:1px solid var(--line);
+    padding-left:max(18px,env(safe-area-inset-left));padding-right:max(18px,env(safe-area-inset-right))}
+  .hbtn{width:36px;height:36px;flex:none;display:inline-flex;align-items:center;justify-content:center;border-radius:8px;border:1px solid var(--line);background:var(--panel2);color:var(--mut);font-size:16px;position:relative}
+  .hbtn:hover{border-color:var(--senal);color:var(--tx)}
+  .hbtn.on{border-color:var(--senal);color:var(--senal)}
+  .hbtn .ndot{position:absolute;top:-3px;right:-3px;min-width:8px;height:8px;border-radius:6px;background:var(--err)}
+  #installbtn{display:none}
+  .themetgl{display:none}   /* toggle de tema en el header: solo móvil (en escritorio vive en el nav) */
   .brand{font-weight:800;font-size:15px;line-height:1.05;letter-spacing:-.02em}
   .live{display:flex;align-items:center;gap:7px;font-size:13px}
   .live .dot{width:8px;height:8px;border-radius:50%;background:var(--senal)}
@@ -48,8 +65,9 @@ PANEL_HTML = r"""<!doctype html>
   .stat.acc b{color:var(--senal)} .stat.rev b{color:var(--cinta)}
   .sp{margin-left:auto}
   .htime{font-family:var(--mono);font-size:12px;color:var(--mut)}
-  .kbtn{background:transparent;border:1px solid var(--line);color:var(--tx);padding:7px 14px;border-radius:var(--r);font-size:13px}
+  .kbtn{background:transparent;border:1px solid var(--line);color:var(--tx);padding:7px 14px;border-radius:var(--r);font-size:13px;display:inline-flex;align-items:center;gap:6px;white-space:nowrap;flex:none}
   .kbtn:hover{border-color:var(--senal)}
+  #pwico{font-size:11px}
 
   /* Body */
   .body{display:grid;grid-template-columns:154px 1fr;min-height:0}
@@ -182,11 +200,97 @@ PANEL_HTML = r"""<!doctype html>
   .editor textarea{min-height:340px;border:0;border-radius:0;background:var(--bg);color:var(--tx)}
   .ro{opacity:.6}
 
-  #tokbar{display:none;gap:8px;align-items:center;padding:8px 16px;background:#3a2a00;border-bottom:1px solid var(--cinta)}
-  #tokbar input{background:#000;border:1px solid var(--cinta);color:#fff;padding:6px 10px;border-radius:var(--r)}
+  #tokbar{display:none;gap:8px;align-items:center;flex-wrap:wrap;padding:8px 16px;background:#3a2a00;border-bottom:1px solid var(--cinta)}
+  #tokbar input{background:#000;border:1px solid var(--cinta);color:#fff;padding:6px 10px;border-radius:var(--r);flex:1;min-width:150px}
 
-  @media (prefers-reduced-motion:reduce){*{transition:none!important}}
-  @media (max-width:1080px){.conv{grid-template-columns:230px 1fr}.promptcols{grid-template-columns:1fr}.stats{gap:10px}}
+  /* back button del hilo (solo móvil) y reply row con safe-area */
+  .backbtn{display:none;align-items:center;justify-content:center;width:34px;height:34px;margin-right:10px;flex:none;
+    border:1px solid var(--line);background:var(--panel2);color:var(--tx);border-radius:8px;font-size:16px}
+  .thead .row1{align-items:center}
+
+  /* toast de notificación in-app (fallback / feedback visual) */
+  #toasts{position:fixed;right:14px;bottom:14px;display:flex;flex-direction:column;gap:8px;z-index:80;max-width:min(360px,90vw);
+    right:max(14px,env(safe-area-inset-right));bottom:max(14px,env(safe-area-inset-bottom))}
+  .toast{background:var(--panel2);border:1px solid var(--line);border-left:3px solid var(--senal);border-radius:var(--r);
+    padding:10px 12px;box-shadow:0 8px 24px rgba(0,0,0,.35);cursor:pointer;animation:tin .18s ease}
+  .toast .tt{font-weight:600;font-size:13px;margin-bottom:2px;display:flex;gap:6px;align-items:center}
+  .toast .tb{color:var(--mut);font-size:12.5px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .toast.rev{border-left-color:var(--cinta)} .toast.err{border-left-color:var(--err)} .toast.order{border-left-color:var(--senal)}
+  @keyframes tin{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:none}}
+
+  @media (prefers-reduced-motion:reduce){*{transition:none!important;animation:none!important}}
+
+  /* ---------- Tablet ---------- */
+  @media (max-width:1080px){
+    .conv{grid-template-columns:240px 1fr}
+    .promptcols{grid-template-columns:1fr}
+    .stats{gap:10px}
+    .row{max-width:80%}
+  }
+  @media (max-width:900px){
+    .body{grid-template-columns:120px 1fr}
+    nav.side .it{font-size:13px;padding:11px 10px;gap:6px}
+    .conv{grid-template-columns:220px 1fr}
+    .htime{display:none}
+    .grid{grid-template-columns:1fr}
+  }
+
+  /* ---------- Móvil ---------- */
+  @media (max-width:680px){
+    header{gap:10px;height:52px}
+    .brand{font-size:13px}
+    .stats{display:none}
+    #pwlabel{display:none}
+    .live{gap:0}
+    .kbtn{padding:7px 10px}
+    .themetgl{display:inline-flex}
+
+    /* nav lateral -> barra inferior de pestañas */
+    .body{grid-template-columns:1fr}
+    nav.side{position:fixed;left:0;right:0;bottom:0;top:auto;height:auto;flex-direction:row;padding:0;z-index:50;
+      border-right:0;border-top:1px solid var(--line);
+      padding-bottom:env(safe-area-inset-bottom);box-shadow:0 -6px 20px rgba(0,0,0,.25)}
+    nav.side .it{flex:1;flex-direction:column;gap:3px;justify-content:center;text-align:center;
+      border-left:0;border-top:3px solid transparent;padding:8px 2px 7px;font-size:10.5px;line-height:1.1}
+    nav.side .it.active{border-left-color:transparent;border-top-color:var(--senal);
+      background:linear-gradient(0deg,rgba(200,87,30,.12),transparent)}
+    nav.side .it .n{display:none}
+    nav.side .foot{display:none}
+    nav.side .it .badge{position:absolute;top:5px;left:calc(50% + 8px);margin:0}
+
+    main{padding-bottom:0}
+    .pane{padding:16px 16px calc(66px + env(safe-area-inset-bottom))}
+    .chats{padding-bottom:calc(66px + env(safe-area-inset-bottom))}
+    .savebar{bottom:calc(60px + env(safe-area-inset-bottom));margin-bottom:0}
+
+    /* conversaciones: lista o hilo (una a la vez) */
+    .conv{grid-template-columns:1fr}
+    .conv .thread{display:none}
+    .conv.show-thread .chats{display:none}
+    .conv.show-thread .thread{display:flex}
+    body.thread-open nav.side{display:none}   /* hilo a pantalla completa */
+    .backbtn{display:inline-flex}
+    .thead{padding:10px 14px}
+    .thead .acts{flex-wrap:wrap}
+    .msgs{padding:16px 14px}
+    .row{max-width:88%}
+    .replyrow{padding:10px 14px;padding-bottom:max(10px,env(safe-area-inset-bottom))}
+    .tfoot{padding-bottom:max(11px,env(safe-area-inset-bottom))}
+
+    .pane h2{font-size:18px}
+    .atabs{gap:14px;overflow-x:auto}
+  }
+  @media (max-width:460px){
+    header{gap:8px}
+    #pwbtn .lbl{display:none}   /* solo el icono ⏸/▶ para no desbordar */
+    #pwico{font-size:14px}
+  }
+  @media (max-width:360px){
+    .brand{display:none}
+  }
+
+  /* en modo app instalada, ocultamos el botón de instalar */
+  @media (display-mode:standalone){#installbtn{display:none!important}}
 </style>
 </head>
 <body>
@@ -201,7 +305,10 @@ PANEL_HTML = r"""<!doctype html>
     </div>
     <span class="sp"></span>
     <span class="htime" id="htime"></span>
-    <button class="kbtn" id="pwbtn" onclick="toggleGlobal()">Pausar bot</button>
+    <button class="hbtn" id="installbtn" onclick="instalarApp()" title="Instalar la app">⤓</button>
+    <button class="hbtn" id="notifbtn" onclick="toggleNotif()" title="Activar notificaciones">🔔<span class="ndot" id="notifdot" style="display:none"></span></button>
+    <button class="hbtn themetgl" onclick="toggleTheme()" title="Cambiar tema" id="themetgl">☾</button>
+    <button class="kbtn" id="pwbtn" onclick="toggleGlobal()"><span id="pwico">⏸</span><span class="lbl" id="pwlbl">Pausar bot</span></button>
   </header>
 
   <div id="tokbar">
@@ -230,7 +337,7 @@ PANEL_HTML = r"""<!doctype html>
             <div id="chats"><div class="empty">Cargando…</div></div>
           </div>
           <div class="thread">
-            <div class="thead" id="thead"><div class="row1"><div><div class="cn">Elegí una conversación</div></div></div></div>
+            <div class="thead" id="thead"><div class="row1"><button class="backbtn" onclick="cerrarHilo()" title="Volver">‹</button><div><div class="cn">Elegí una conversación</div></div></div></div>
             <div class="msgs" id="msgs"><div class="empty">Selecciona un chat de la izquierda.</div></div>
             <div class="replyrow" id="replyrow">
               <input id="rin" placeholder="Escribe como asesor (pausa el bot 30 min)…" onkeydown="if(event.key==='Enter')responder()"/>
@@ -312,6 +419,7 @@ PANEL_HTML = r"""<!doctype html>
     </main>
   </div>
 </div>
+<div id="toasts"></div>
 
 <script>
 const $ = s => document.querySelector(s);
@@ -332,11 +440,14 @@ function esNum(s){ return /^[+0-9()\- ]{6,}$/.test(s||''); }
 function esTest(id){ return /^(1809|1829|1849)0{4,}|^18091110|^18092220|^18093330|^18094440|^18095550|^18095557|^18095558/.test(id||''); }
 
 // tema
-function toggleTheme(){ const l=document.documentElement.getAttribute('data-theme')==='light'; document.documentElement.setAttribute('data-theme',l?'dark':'light'); $('#themebtn').textContent=l?'☾':'☀'; localStorage.setItem('panel_theme',l?'dark':'light'); }
+function pintarTema(light){ const ic=light?'☀':'☾'; const a=$('#themebtn'),b=$('#themetgl'); if(a)a.textContent=ic; if(b)b.textContent=ic;
+  const mt=document.querySelector('meta[name=theme-color]'); if(mt)mt.setAttribute('content',light?'#F3F0E8':'#16150F'); }
+function toggleTheme(){ const l=document.documentElement.getAttribute('data-theme')==='light'; document.documentElement.setAttribute('data-theme',l?'dark':'light'); localStorage.setItem('panel_theme',l?'dark':'light'); pintarTema(!l); }
 if(localStorage.getItem('panel_theme')==='light'){ document.documentElement.setAttribute('data-theme','light'); }
 
 // nav
 document.querySelectorAll('nav.side .it').forEach(b=>b.onclick=()=>{
+  cerrarHilo();
   document.querySelectorAll('nav.side .it').forEach(x=>x.classList.remove('active')); b.classList.add('active');
   document.querySelectorAll('.view').forEach(v=>v.classList.remove('active')); $('#v-'+b.dataset.v).classList.add('active');
   if(b.dataset.v==='config') loadCfg(); if(b.dataset.v==='prompt') loadPrompt(); if(b.dataset.v==='aprendizaje') loadAprendizaje();
@@ -348,7 +459,7 @@ function tick(){ $('#htime').textContent=new Date().toLocaleTimeString('es-DO',{
 
 // encendido global
 async function loadGlobal(){ try{ const d=await api('/bot'); pintarGlobal(d.encendido); }catch(e){} }
-function pintarGlobal(on){ $('#hdot').className='dot'+(on?'':' off'); $('#pwlabel').textContent=on?'Bot activo':'Bot en pausa'; $('#pwbtn').textContent=on?'Pausar bot':'Encender bot'; }
+function pintarGlobal(on){ $('#hdot').className='dot'+(on?'':' off'); $('#pwlabel').textContent=on?'Bot activo':'Bot en pausa'; const ic=$('#pwico'),lb=$('#pwlbl'); if(ic)ic.textContent=on?'⏸':'▶'; if(lb)lb.textContent=on?'Pausar bot':'Encender bot'; }
 async function toggleGlobal(){ const on=$('#pwlabel').textContent!=='Bot activo'; if(!on&&!confirm('¿Pausar el bot para TODOS los clientes?'))return; const d=await api('/bot/'+(on?'on':'off'),{method:'POST'}); pintarGlobal(d.encendido); }
 
 // stats
@@ -378,12 +489,14 @@ function renderChats(){
       <div class="m">${esc(c.ultimo)||'—'}</div></button>`;
   }).join('');
 }
+function abrirVistaHilo(){ const c=document.querySelector('.conv'); if(c)c.classList.add('show-thread'); document.body.classList.add('thread-open'); }
+function cerrarHilo(){ const c=document.querySelector('.conv'); if(c)c.classList.remove('show-thread'); document.body.classList.remove('thread-open'); }
 async function openChat(id){
-  selChat=id; renderChats();
+  selChat=id; renderChats(); abrirVistaHilo();
   const d=await api('/chats/'+encodeURIComponent(id)); const m=d.meta||{}; curItems=d.items||[];
   const canal=(m.telefono?'WhatsApp':'WhatsApp')+' · Santo Domingo';
   const hoy=new Date().toLocaleDateString('es-DO',{day:'2-digit',month:'long'}).toUpperCase();
-  $('#thead').innerHTML=`<div class="row1"><div><div class="cn">${esc(m.user_name)||esc(id)}</div><div class="cs">${esc(canal)}</div></div>
+  $('#thead').innerHTML=`<div class="row1"><button class="backbtn" onclick="cerrarHilo()" title="Volver">‹</button><div><div class="cn">${esc(m.user_name)||esc(id)}</div><div class="cs">${esc(canal)}</div></div>
     <div class="date eyebrow">Hoy · ${hoy}</div></div>
     ${m.ad_id?`<div class="adbanner">📣 Vino del anuncio de Facebook${m.ad_producto?': '+esc(m.ad_producto):(m.ad_headline?': '+esc(m.ad_headline):'')} · ID ${esc(m.ad_id)}</div>`:''}
     <div class="acts">
@@ -442,7 +555,7 @@ function dondeDe(e){ if(e.donde)return e.donde; for(const m of (e.motivos||[]))i
 function porQueDe(e){ return (e.motivos||[]).map(m=>MOTIVOS[m]?MOTIVOS[m].e:m).join(' ')||''; }
 async function pollEvents(){ try{ const d=await api('/events?after='+lastEventId);
     if(d.eventos&&d.eventos.length){ lastEventId=d.ultimo_id; let tocaSel=false;
-      for(const e of d.eventos){ alerts.unshift(e); if(alerts.length>400)alerts.pop(); if(ALERTA.includes(e.kind))alertCount++; if(e.chat_id===selChat)tocaSel=true; }
+      for(const e of d.eventos){ alerts.unshift(e); if(alerts.length>400)alerts.pop(); if(ALERTA.includes(e.kind))alertCount++; if(e.chat_id===selChat)tocaSel=true; if(notifPrimed)notificarEvento(e); }
       renderBadge(); renderFeed(); if(tocaSel)openChat(selChat); }
     $('#hdot').classList.remove('bad');
   }catch(e){ $('#hdot').classList.add('bad'); } }
@@ -543,10 +656,72 @@ async function aprobarSug(id){ await api('/sugerencias/'+id+'/aprobar',{method:'
 async function rechazarSug(id){ await api('/sugerencias/'+id+'/rechazar',{method:'POST'}); loadAprendizaje(); }
 async function analizar(){ $('#anmsg').textContent='Analizando…'; try{ const d=await api('/sugerencias/analizar',{method:'POST'}); $('#anmsg').innerHTML='<span class="ok">Listo: '+(d.sugeridas||0)+' sugerencia(s), '+(d.auto_aplicadas||0)+' aplicada(s).</span>'; }catch(e){ $('#anmsg').innerHTML='<span class="bad">Error al analizar</span>'; } loadAprendizaje(); }
 
+// ---------------------------------------------------------- PWA ---
+let swReg=null, deferredPrompt=null;
+if('serviceWorker' in navigator){
+  window.addEventListener('load',()=>{ navigator.serviceWorker.register('/panel/sw.js',{scope:'/panel'})
+    .then(r=>{ swReg=r; }).catch(()=>{}); });
+  navigator.serviceWorker.addEventListener('message',ev=>{ const m=ev.data||{};
+    if(m.type==='open-chat'&&m.chat_id){ document.querySelector('nav.side .it[data-v=conv]').click(); openChat(m.chat_id); } });
+}
+window.addEventListener('beforeinstallprompt',ev=>{ ev.preventDefault(); deferredPrompt=ev; $('#installbtn').style.display='inline-flex'; });
+async function instalarApp(){ if(!deferredPrompt){ alert('Para instalar: usa el menú del navegador → "Agregar a pantalla de inicio" / "Instalar".'); return; }
+  deferredPrompt.prompt(); try{ await deferredPrompt.userChoice; }catch(e){} deferredPrompt=null; $('#installbtn').style.display='none'; }
+window.addEventListener('appinstalled',()=>{ $('#installbtn').style.display='none'; showToast('order','✓ App instalada','Ya puedes abrir el panel como aplicación.'); });
+
+// ------------------------------------------------- notificaciones ---
+let notifOn = localStorage.getItem('panel_notif')!=='0';   // activadas por defecto (si hay permiso)
+let notifPrimed = false;                                    // evita notificar el histórico del primer poll
+function refreshNotifBtn(){ const b=$('#notifbtn'); if(!b)return; const perm=('Notification' in window)?Notification.permission:'denied';
+  const activo = perm==='granted' && notifOn; b.classList.toggle('on',activo);
+  b.title = perm==='denied' ? 'Notificaciones bloqueadas en el navegador'
+          : perm!=='granted' ? 'Activar notificaciones'
+          : (notifOn ? 'Notificaciones activas — clic para silenciar' : 'Notificaciones silenciadas — clic para activar');
+  b.textContent = activo ? '🔔' : '🔕'; const d=$('#notifdot'); if(d)d.style.display = (perm==='default') ? 'block' : 'none'; }
+async function toggleNotif(){
+  if(!('Notification' in window)){ alert('Este navegador no soporta notificaciones.'); return; }
+  if(Notification.permission==='denied'){ alert('Las notificaciones están bloqueadas. Actívalas en los ajustes del sitio (icono del candado en la barra de direcciones).'); return; }
+  if(Notification.permission!=='granted'){ let p; try{ p=await Notification.requestPermission(); }catch(e){ p='denied'; }
+    if(p!=='granted'){ refreshNotifBtn(); return; } notifOn=true; localStorage.setItem('panel_notif','1'); refreshNotifBtn();
+    showToast('order','🔔 Notificaciones activadas','Te avisaremos de cada chat entrante y de las acciones del bot.'); return; }
+  notifOn=!notifOn; localStorage.setItem('panel_notif',notifOn?'1':'0'); refreshNotifBtn(); }
+
+function showToast(kind,title,body,chatId){ const wrap=$('#toasts'); if(!wrap)return;
+  const cls=['revision','handoff','comprobante_sin_pedido'].includes(kind)?'rev':(kind==='error'?'err':(kind==='order'?'order':''));
+  const t=document.createElement('div'); t.className='toast '+cls;
+  t.innerHTML=`<div class="tt">${esc(title)}</div>${body?`<div class="tb">${esc(body)}</div>`:''}`;
+  t.onclick=()=>{ if(chatId&&chatId!=='-'&&chatId)verConv(chatId); t.remove(); };
+  wrap.appendChild(t); while(wrap.children.length>4) wrap.firstChild.remove();
+  setTimeout(()=>{ t.style.opacity='0'; setTimeout(()=>t.remove(),220); },6500); }
+
+function notifTexto(e){ const name=e.user_name||e.chat_id||'un cliente';
+  switch(e.kind){
+    case 'turn': return {t:'💬 '+name, b:e.texto||'Nuevo mensaje'};
+    case 'order': return {t:'🟢 Pedido creado', b:(e.detalle||'pedido')+' — '+name};
+    case 'revision': case 'handoff': case 'comprobante_sin_pedido':
+      return {t:'🟡 Revisar · '+name, b:porQueDe(e)||e.resumen||e.detalle||'Necesita atención'};
+    case 'error': return {t:'🔴 Error del sistema', b:traducirError(e.detalle)};
+    case 'manual': return {t:'✍️ Respuesta de asesor', b:(e.detalle||'')+' — '+name};
+    case 'control': return {t:'⚙️ Cambio en el panel', b:e.detalle||''};
+    default: return null; } }
+function notificarEvento(e){ const info=notifTexto(e); if(!info)return;
+  const viendo = document.visibilityState==='visible' && e.chat_id===selChat && $('#v-conv').classList.contains('active');
+  if(viendo) return;
+  showToast(e.kind, info.t, info.b, e.chat_id);
+  if(!notifOn || !('Notification' in window) || Notification.permission!=='granted') return;
+  const opt={ body:info.b, icon:'/panel/static/icon-192.png', badge:'/panel/static/icon-192.png',
+    tag:'past-'+(e.chat_id||e.kind), renotify:true, data:{chat_id:e.chat_id||''} };
+  try{
+    if(swReg&&swReg.showNotification){ swReg.showNotification(info.t, opt); }
+    else { const n=new Notification(info.t, opt); n.onclick=()=>{ window.focus(); if(e.chat_id&&e.chat_id!=='-')verConv(e.chat_id); n.close(); }; }
+  }catch(_){}
+}
+
 // boot
-async function boot(){ renderFiltros(); tick(); setInterval(tick,20000);
+async function boot(){ renderFiltros(); tick(); setInterval(tick,20000); pintarTema(document.documentElement.getAttribute('data-theme')==='light'); refreshNotifBtn();
   try{ await fetch('/panel/api/whoami',{headers:headers()}); }catch(e){}
   await loadGlobal(); await loadChats(); await pollEvents();
+  notifPrimed=true;
   clearInterval(window._t1); clearInterval(window._t2); window._t1=setInterval(pollEvents,3000); window._t2=setInterval(loadChats,10000);
 }
 boot();
@@ -554,3 +729,100 @@ boot();
 </body>
 </html>
 """
+
+
+# --------------------------------------------------------------- PWA ---
+# Manifest de instalación. start_url/scope en /panel/ para que la app instalada
+# abra el panel. Los iconos se sirven desde /panel/static/.
+MANIFEST = {
+    "id": "/panel/",
+    "name": "Pastoriza Bot · Panel",
+    "short_name": "Pastoriza",
+    "description": "Panel de operación del bot de WhatsApp de Pastoriza Plastics.",
+    "start_url": "/panel/",
+    "scope": "/panel/",
+    "display": "standalone",
+    "orientation": "any",
+    "background_color": "#16150F",
+    "theme_color": "#16150F",
+    "lang": "es",
+    "dir": "ltr",
+    "categories": ["business", "productivity"],
+    "icons": [
+        {"src": "/panel/static/icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any"},
+        {"src": "/panel/static/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any"},
+        {"src": "/panel/static/icon-maskable.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable"},
+    ],
+}
+
+
+# Service worker: cachea el shell para uso offline y enruta el clic de las
+# notificaciones a la conversación. NUNCA cachea /panel/api/* (datos con token).
+SERVICE_WORKER = r"""/* Panel Pastoriza · service worker */
+const CACHE = 'pastoriza-panel-v1';
+const SHELL = [
+  '/panel/',
+  '/panel/manifest.webmanifest',
+  '/panel/static/favicon.svg',
+  '/panel/static/icon-192.png',
+  '/panel/static/icon-512.png',
+  '/panel/static/icon-maskable.png',
+  '/panel/static/apple-touch-icon.png',
+];
+
+self.addEventListener('install', (e) => {
+  e.waitUntil(caches.open(CACHE).then((c) => c.addAll(SHELL)).then(() => self.skipWaiting()));
+});
+
+self.addEventListener('activate', (e) => {
+  e.waitUntil(
+    caches.keys().then((keys) => Promise.all(keys.filter((k) => k !== CACHE).map((k) => caches.delete(k))))
+      .then(() => self.clients.claim())
+  );
+});
+
+self.addEventListener('fetch', (e) => {
+  const req = e.request;
+  if (req.method !== 'GET') return;
+  const url = new URL(req.url);
+  if (url.origin !== self.location.origin) return;
+  // los datos (con token) siempre van a la red, nunca a la cache
+  if (url.pathname.startsWith('/panel/api/')) return;
+  if (!url.pathname.startsWith('/panel')) return;
+
+  // navegaciones (HTML): red primero, cache de respaldo (offline)
+  if (req.mode === 'navigate') {
+    e.respondWith(
+      fetch(req).then((r) => { caches.open(CACHE).then((c) => c.put('/panel/', r.clone())); return r; })
+        .catch(() => caches.match('/panel/').then((m) => m || caches.match(req)))
+    );
+    return;
+  }
+  // estáticos (iconos, manifest): cache primero
+  e.respondWith(
+    caches.match(req).then((m) => m || fetch(req).then((r) => {
+      if (r && r.ok) { const cp = r.clone(); caches.open(CACHE).then((c) => c.put(req, cp)); }
+      return r;
+    }).catch(() => m))
+  );
+});
+
+// clic en una notificación -> enfoca (o abre) el panel y le pide abrir el chat
+self.addEventListener('notificationclick', (e) => {
+  e.notification.close();
+  const chatId = (e.notification.data && e.notification.data.chat_id) || '';
+  e.waitUntil((async () => {
+    const all = await self.clients.matchAll({ type: 'window', includeUncontrolled: true });
+    for (const c of all) {
+      if (c.url.includes('/panel')) {
+        await c.focus();
+        if (chatId && chatId !== '-') c.postMessage({ type: 'open-chat', chat_id: chatId });
+        return;
+      }
+    }
+    const w = await self.clients.openWindow('/panel/');
+    if (w && chatId && chatId !== '-') { try { w.postMessage({ type: 'open-chat', chat_id: chatId }); } catch (_) {} }
+  })());
+});
+"""
+

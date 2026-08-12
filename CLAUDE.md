@@ -59,7 +59,14 @@ Config de **negocio** editable en Redis (`app/business_config.py`) ≠ config de
 (`app/settings.py`).
 
 **Panel de operación** (`app/panel/`, servido en `/panel`, protegido con `PANEL_TOKEN`): CRM en
-vivo, alertas, config, prompts por-agente, aprendizaje, kill-switch global.
+vivo, alertas, config, prompts por-agente, aprendizaje, kill-switch global. La UI es una SPA
+vanilla en `ui.py` (`PANEL_HTML`), **responsive** (nav lateral en escritorio → barra inferior +
+hilo a pantalla completa en móvil) e **instalable como PWA**: `MANIFEST` + `SERVICE_WORKER` en
+`ui.py`, iconos en `app/panel/static/` (los sirve `router.py` en `/panel/manifest.webmanifest`,
+`/panel/sw.js`, `/panel/static/*`; el SW usa scope `/panel` vía cabecera `Service-Worker-Allowed`).
+**Notificaciones** de cada chat entrante/acción: el poll de `/api/events` dispara notificación del
+SO (Web Notifications) + toast in-app; clic → abre el chat. Los assets viven bajo `app/` así que el
+`COPY app ./app` del Dockerfile ya los incluye (no toca `.dockerignore`).
 
 ## Gotchas (esto rompe si no lo sabes)
 
