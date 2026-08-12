@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-label="Pastoriza Bot">
+  <rect width="512" height="512" rx="112" fill="#16150F"/>
+  <path d="M164 102h184a58 58 0 0 1 58 58v104a58 58 0 0 1-58 58H214l-46 52 8-52h-12a58 58 0 0 1-58-58V160a58 58 0 0 1 58-58Z" fill="#C8571E"/>
+  <rect x="168" y="168" width="176" height="24" rx="12" fill="#16150F"/>
+  <rect x="168" y="212" width="137" height="24" rx="12" fill="#D9B95C"/>
+  <rect x="168" y="256" width="92" height="24" rx="12" fill="#16150F"/>
+</svg>

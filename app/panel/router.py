@@ -7,10 +7,11 @@ from __future__ import annotations
 
 import hmac
 import time
+from pathlib import Path
 from typing import Any
 
 from fastapi import APIRouter, Header, HTTPException, Request
-from fastapi.responses import HTMLResponse
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Response
 
 from app.business_config import (
     config_as_dict,
@@ -31,7 +32,7 @@ from app.estado import (
 from app.logging_conf import get_logger
 from app.panel import conocimiento, events, prompt_store
 from app.panel.analista import analizar_y_sugerir
-from app.panel.ui import PANEL_HTML
+from app.panel.ui import MANIFEST, PANEL_HTML, SERVICE_WORKER
 from app.redis_client import get_redis, with_reconnect
 from app.session import RedisSession
 from app.settings import settings
@@ -60,6 +61,57 @@ async def panel_home() -> HTMLResponse:
     # no-store: el navegador no cachea el panel, así cada deploy se ve al instante
     # sin tener que forzar la recarga.
     return HTMLResponse(PANEL_HTML, headers={"Cache-Control": "no-store"})
+
+
+# ------------------------------------------------------- PWA (público) ---
+_STATIC_DIR = Path(__file__).resolve().parent / "static"
+_STATIC_TYPES = {
+    ".png": "image/png",
+    ".svg": "image/svg+xml",
+    ".webmanifest": "application/manifest+json",
+    ".json": "application/json",
+    ".ico": "image/x-icon",
+}
+
+
+@panel_router.get("/manifest.webmanifest")
+async def panel_manifest() -> JSONResponse:
+    # El manifest es público (no lleva datos sensibles). El navegador lo pide sin
+    # cabeceras de token, por eso no exige _auth.
+    return JSONResponse(
+        MANIFEST,
+        media_type="application/manifest+json",
+        headers={"Cache-Control": "public, max-age=3600"},
+    )
+
+
+@panel_router.get("/sw.js")
+async def panel_service_worker() -> Response:
+    # Service-Worker-Allowed amplía el scope a /panel para que controle también la
+    # URL sin barra final. no-store: cada deploy actualiza el SW al instante.
+    return Response(
+        content=SERVICE_WORKER,
+        media_type="application/javascript",
+        headers={
+            "Cache-Control": "no-store",
+            "Service-Worker-Allowed": "/panel",
+        },
+    )
+
+
+@panel_router.get("/static/{name}")
+async def panel_static(name: str) -> FileResponse:
+    # Sirve iconos/favicon del PWA. Whitelist estricta por nombre (sin subrutas)
+    # para evitar path traversal.
+    if "/" in name or "\\" in name or name.startswith("."):
+        raise HTTPException(status_code=404, detail="no encontrado")
+    path = (_STATIC_DIR / name).resolve()
+    if _STATIC_DIR not in path.parents or not path.is_file():
+        raise HTTPException(status_code=404, detail="no encontrado")
+    media = _STATIC_TYPES.get(path.suffix.lower(), "application/octet-stream")
+    return FileResponse(
+        path, media_type=media, headers={"Cache-Control": "public, max-age=604800"}
+    )
 
 
 @panel_router.get("/api/whoami")
