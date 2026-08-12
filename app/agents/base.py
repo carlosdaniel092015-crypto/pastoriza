@@ -59,6 +59,15 @@ Formas de pago: {cfg.formas_pago}.
 Pago contra entrega: {"NO se acepta" if str(cfg.contra_entrega).strip().lower() in ("no", "false", "0", "") else cfg.contra_entrega}."""
     ]
 
+    if str(cfg.envio_minimo_por_tamano).strip():
+        partes.append(
+            "# ENVÍO: CANTIDAD MÍNIMA POR TAMAÑO (regla de negocio)\n"
+            f"{cfg.envio_minimo_por_tamano}\n"
+            "Si el cliente quiere ENVÍO con menos unidades de las que exige su tamaño, "
+            "díselo con amabilidad y ofrécele completar el mínimo o retirar en tienda "
+            "(el retiro no tiene mínimo por tamaño). No inventes otros mínimos."
+        )
+
     if str(cfg.fardo_cantidad).strip():
         partes.append(
             f"# VENTA POR FARDO\nTambién se vende por fardo de {cfg.fardo_cantidad} "

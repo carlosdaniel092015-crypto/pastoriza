@@ -38,6 +38,15 @@ class TestRespondeSolo:
         out = r("cuanto cuesta el envio")
         assert out and CFG.precio_envio in out
 
+    def test_envio_incluye_minimo_por_tamano(self):
+        out = r("cuanto cuesta el envio")
+        assert out and CFG.envio_minimo_por_tamano in out
+
+    def test_envio_sin_minimo_por_tamano_no_lo_muestra(self):
+        cfg = BusinessConfig(envio_minimo_por_tamano="")
+        out = respuesta_directa("cuanto cuesta el envio", cfg)
+        assert out and "Minimo para envio" not in out
+
     def test_telefono(self):
         out = r("cual es el telefono")
         assert out and CFG.telefono in out

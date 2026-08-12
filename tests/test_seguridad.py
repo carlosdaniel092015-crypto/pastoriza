@@ -35,6 +35,23 @@ PRODUCTO = Producto(
 )
 
 
+class TestBloqueDinamico:
+    def test_incluye_minimo_de_envio_por_tamano(self):
+        from app.agents.base import _bloque_dinamico
+
+        c = ctx_nuevo()
+        bloque = _bloque_dinamico(c)
+        assert "CANTIDAD MÍNIMA POR TAMAÑO" in bloque
+        assert c.cfg.envio_minimo_por_tamano in bloque
+
+    def test_omite_bloque_si_no_hay_minimo(self):
+        from app.agents.base import _bloque_dinamico
+
+        c = ctx_nuevo(cfg=BusinessConfig(envio_minimo_por_tamano=""))
+        bloque = _bloque_dinamico(c)
+        assert "CANTIDAD MÍNIMA POR TAMAÑO" not in bloque
+
+
 class TestNoConfirmarPedidosFalsos:
     def test_bloquea_pedido_registrado_sin_order_id(self):
         c = ctx_nuevo()

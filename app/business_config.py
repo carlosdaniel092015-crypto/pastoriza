@@ -59,6 +59,12 @@ class BusinessConfig:
     monto_minimo: str = "1000"  # pedido mínimo en RD$
     formas_pago: str = "Tarjetas de credito, transferencia, depositos y pago en efectivo"
     contra_entrega: str = "No"  # ¿se acepta pago contra entrega? No
+    # Cantidad mínima para ENVÍO según el tamaño del envase (regla de negocio).
+    # Vacío = no aplica ninguna regla de mínimo por tamaño.
+    envio_minimo_por_tamano: str = (
+        "4, 8 y 12 oz: minimo 300 botellas para envio (1 paquete = 300 botellas). "
+        "16 oz: minimo 200 botellas. Venta por fardo: desde 1 fardo."
+    )
     # Venta por fardo (OPCIONAL: dejar vacío hasta que el cliente confirme los datos)
     fardo_cantidad: str = ""  # unidades por fardo
     fardo_envio_minimo: str = ""  # envío mínimo por fardo
