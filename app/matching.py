@@ -53,7 +53,28 @@ def norm(s: str) -> str:
     s = _RE_NO_ALNUM.sub(" ", s)
     s = re.sub(r"\bmedio\b", "1/2", s)
     s = re.sub(r"\bmedia\b", "1/2", s)
+    # El cliente dice "pote", "frasco" (o el typo "fraco") por BOTELLA: no hay
+    # productos con esos nombres en el catálogo.
+    s = re.sub(r"\b(?:potes?|frascos?|fracos?)\b", "botella", s)
+    # Singularizar el vocabulario del dominio: "galones cuadrados" (plural del
+    # cliente) debe matchear "GALON ... CUADRADO" (singular del catálogo). Mapa
+    # explícito para no sobre-cortar (los plurales en español son irregulares).
+    s = " ".join(_SINGULARES.get(w, w) for w in s.split(" ") if w)
     return _RE_ESPACIOS.sub(" ", s).strip()
+
+
+_SINGULARES = {
+    # "envases" NO se singulariza: "envase" es palabra STOP (genérica) y no hay
+    # productos "ENVASE" en el catálogo; singularizarla la haría desaparecer.
+    "botellas": "botella", "galones": "galon",
+    "botellones": "botellon", "tarros": "tarro", "frascos": "frasco",
+    "pomos": "pomo", "tapas": "tapa", "dispensadores": "dispensador",
+    "jarras": "jarra", "vasos": "vaso",
+    "cuadrados": "cuadrado", "cuadradas": "cuadrada",
+    "cilindricos": "cilindrico", "cilindricas": "cilindrica",
+    "lisos": "liso", "lisas": "lisa", "naturales": "natural",
+    "onzas": "onza", "litros": "litro",
+}
 
 
 def caps(s: str) -> list[str]:
