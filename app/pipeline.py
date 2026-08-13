@@ -120,6 +120,13 @@ async def manejar_saliente(body: dict) -> None:
 
     log.info("takeover_supervisor", chat_id=chat_id)
     await pausar_bot(chat_id)
+    # Guardar el mensaje del supervisor en el historial: así el bot NO pierde el
+    # hilo cuando retome, sin importar si respondiste desde el panel o desde YCloud.
+    texto_sup = (info.get("texto") or "").strip()
+    if texto_sup:
+        await RedisSession(chat_id).add_items(
+            [{"role": "assistant", "content": f"[SUPERVISOR] {texto_sup}"}]
+        )
     await encolar_revision(
         chat_id, ["takeover_supervisor"],
         info.get("texto") or "(mensaje del supervisor desde YCloud)", None, "",
