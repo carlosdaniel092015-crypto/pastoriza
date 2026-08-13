@@ -184,6 +184,7 @@ async def api_chats(x_panel_token: str | None = Header(default=None)) -> dict:
                 "user_name": m.get("user_name", ""),
                 "telefono": m.get("telefono", ""),
                 "ultimo": m.get("ultimo", ""),
+                "ultimo_de": m.get("ultimo_de", "cliente"),
                 "ultimo_ts": m.get("ultimo_ts", 0),
                 "pausado": pausado,
             }
@@ -396,6 +397,12 @@ async def api_responder(
     )
     await events.publicar(
         "manual", chat_id, detalle=texto[:200], enviado=enviado, user_name=meta.get("user_name", "")
+    )
+    # En la lista de chats, lo último pasa a ser lo que escribió el asesor.
+    await events.tocar_chatmeta(
+        chat_id, emisor=emisor, destino=destino,
+        user_name=meta.get("user_name", ""), telefono=meta.get("telefono", ""),
+        ultimo=texto, ultimo_de="asesor",
     )
     return {"ok": True, "enviado": enviado, "pausado": True}
 
