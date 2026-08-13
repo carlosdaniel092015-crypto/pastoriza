@@ -85,13 +85,26 @@ async def load_config(force: bool = False) -> BusinessConfig:
     if not force and _cache and (now - _cache[0]) < _CACHE_TTL:
         return _cache[1]
 
-    data: dict = {}
+    data: dict | None = None
     try:
-        raw = await get_redis().get(CONFIG_KEY)
-        if raw:
-            data = json.loads(raw)
+        # with_reconnect: un blip de Redis reintenta en vez de degradar de una.
+        from app.redis_client import with_reconnect
+
+        raw = await with_reconnect(lambda r: r.get(CONFIG_KEY))
+        data = json.loads(raw) if raw else {}
     except Exception as exc:  # noqa: BLE001
         log.warning("config_load_failed", error=str(exc))
+        data = None
+
+    if data is None:
+        # NO caer a los defaults hardcodeados: si el panel cambió precios, envío o
+        # cuentas, cotizaríamos con valores VIEJOS y el cliente pagaría distinto.
+        # Preferimos la última config buena; si no hay ninguna, ahí sí defaults.
+        if _cache:
+            log.warning("config_usando_cache_previa")
+            return _cache[1]
+        log.error("config_sin_redis_usando_defaults")
+        data = {}
 
     valid = {f.name for f in fields(BusinessConfig)}
     cfg = BusinessConfig(**{k: str(v) for k, v in data.items() if k in valid})

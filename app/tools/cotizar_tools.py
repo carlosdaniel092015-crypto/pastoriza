@@ -6,6 +6,9 @@ from dataclasses import dataclass
 from agents import RunContextWrapper, function_tool
 
 from app.context import ConversationContext
+from app.logging_conf import get_logger
+
+log = get_logger(__name__)
 
 
 @dataclass
@@ -59,6 +62,7 @@ async def cotizar(
     precio_unitario: float,
     cantidad: int,
     modalidad: str = "",
+    producto_id: int = 0,
 ) -> str:
     """Calcula la cotización con ITBIS y envío. Úsala SIEMPRE; nunca calcules a mano.
 
@@ -66,8 +70,32 @@ async def cotizar(
         precio_unitario: Precio unitario CON ITBIS, tal como lo devolvió el catálogo.
         cantidad: Cantidad de unidades, entero positivo.
         modalidad: "envio", "retiro" o vacío si el cliente aún no eligió.
+        producto_id: id del producto que estás cotizando (el `id=` que devolvió la
+            búsqueda). PÁSALO SIEMPRE: con él se verifica el precio contra el catálogo.
     """
     cfg = ctx.context.cfg
+    # Blindaje de precio (ADR-006), igual que agregar_linea_pedido: la línea del
+    # pedido SIEMPRE usa el precio del catálogo, así que si aquí cotizáramos con
+    # otro, el cliente vería un total y pagaría uno distinto (la corrección era muda).
+    if producto_id:
+        try:
+            from app.catalogo import catalogo
+
+            p = await catalogo.por_tmpl_id(int(producto_id))
+        except Exception:  # noqa: BLE001
+            p = None
+        if p:
+            corregido = abs(float(precio_unitario) - p.precio_con_itbis) > 0.01
+            if corregido:
+                log.warning(
+                    "cotizar_precio_corregido",
+                    chat_id=ctx.context.chat_id,
+                    producto=p.nombre,
+                    enviado=precio_unitario,
+                    real=p.precio_con_itbis,
+                )
+                ctx.context.marcar_revision("cotizar_precio_corregido")
+                precio_unitario = p.precio_con_itbis
     try:
         c = calcular(precio_unitario, cantidad, modalidad, cfg.precio_envio_num)
     except ValueError as exc:

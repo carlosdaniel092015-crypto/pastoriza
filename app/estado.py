@@ -23,13 +23,34 @@ MAX_REVISION = 500
 BOT_GLOBAL_KEY = settings.key("bot_global")  # presente = bot apagado globalmente
 
 
-async def set_bot_global(encendido: bool) -> None:
+async def _escritura_idempotente(op, que: str, **ctx) -> bool:
+    """SET/DELETE idempotentes: reintenta (with_reconnect), no como run_write.
+
+    run_write hace UN intento y se TRAGA el error (devuelve None): con un blip de
+    Redis, pausar el bot o el kill-switch fallaban en silencio y el bot seguía
+    respondiéndole a un cliente que el supervisor ya había tomado. Reintentar es
+    seguro porque estas escrituras son idempotentes (a diferencia de lpush).
+    """
+    try:
+        await with_reconnect(op)
+        return True
+    except Exception as exc:  # noqa: BLE001
+        log.error(que + "_fallo", error=str(exc), **ctx)
+        return False
+
+
+async def set_bot_global(encendido: bool) -> bool:
     """Kill-switch global: enciende/apaga el bot para TODOS los clientes."""
     if encendido:
-        await run_write(lambda r: r.delete(BOT_GLOBAL_KEY))
+        ok = await _escritura_idempotente(
+            lambda r: r.delete(BOT_GLOBAL_KEY), "bot_global"
+        )
     else:
-        await run_write(lambda r: r.set(BOT_GLOBAL_KEY, "off"))
-    log.info("bot_global", encendido=encendido)
+        ok = await _escritura_idempotente(
+            lambda r: r.set(BOT_GLOBAL_KEY, "off"), "bot_global"
+        )
+    log.info("bot_global", encendido=encendido, ok=ok)
+    return ok
 
 
 async def bot_global_apagado() -> bool:
@@ -39,18 +60,26 @@ async def bot_global_apagado() -> bool:
         return False
 
 
-async def pausar_bot(chat_id: str) -> None:
-    await run_write(
+async def pausar_bot(chat_id: str) -> bool:
+    ok = await _escritura_idempotente(
         lambda r: r.set(
             settings.key("bot_disabled", chat_id), "disabled-by-manager", ex=TTL_PAUSA
-        )
+        ),
+        "bot_pausar",
+        chat_id=chat_id,
     )
-    log.info("bot_pausado", chat_id=chat_id)
+    log.info("bot_pausado", chat_id=chat_id, ok=ok)
+    return ok
 
 
-async def reactivar_bot(chat_id: str) -> None:
-    await run_write(lambda r: r.delete(settings.key("bot_disabled", chat_id)))
-    log.info("bot_reactivado", chat_id=chat_id)
+async def reactivar_bot(chat_id: str) -> bool:
+    ok = await _escritura_idempotente(
+        lambda r: r.delete(settings.key("bot_disabled", chat_id)),
+        "bot_reactivar",
+        chat_id=chat_id,
+    )
+    log.info("bot_reactivado", chat_id=chat_id, ok=ok)
+    return ok
 
 
 async def bot_pausado(chat_id: str) -> bool:
@@ -69,8 +98,9 @@ async def registrar_msg_bot(msg_id: str) -> None:
     """Marca un id de mensaje como enviado por el BOT (no por un humano)."""
     if not msg_id:
         return
-    await run_write(
-        lambda r: r.set(settings.key("bot_msg", msg_id), "1", ex=TTL_MSG_BOT)
+    await _escritura_idempotente(
+        lambda r: r.set(settings.key("bot_msg", msg_id), "1", ex=TTL_MSG_BOT),
+        "registrar_msg_bot",
     )
 
 
@@ -86,10 +116,12 @@ async def es_msg_bot(msg_id: str) -> bool:
 
 
 async def tocar_ventana_24h(chat_id: str) -> None:
-    await run_write(
+    await _escritura_idempotente(
         lambda r: r.set(
             settings.key("window_24h", chat_id), str(time.time()), ex=TTL_VENTANA
-        )
+        ),
+        "tocar_ventana_24h",
+        chat_id=chat_id,
     )
 
 

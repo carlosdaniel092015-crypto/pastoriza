@@ -130,12 +130,19 @@ class YCloud:
         emisor: str,
         texto: str,
         simular_tipeo: bool = True,
-    ) -> None:
+    ) -> bool:
+        """Manda el texto (troceado). Devuelve True si TODOS los chunks salieron.
+
+        Devuelve bool porque `_post` nunca lanza (se traga 4xx/timeouts y loguea): sin
+        esto, quien llama no puede distinguir enviado de fallado. El panel lo usa para
+        no decirle al supervisor "enviado" cuando YCloud rechazó el mensaje.
+        """
+        ok_total = True
         for i, chunk in enumerate(self.trocear(texto)):
             if simular_tipeo:
                 ms = min(max(1000 + len(chunk) * 12, 1200), 5000)
                 await asyncio.sleep((ms + random.randint(0, 600)) / 1000)
-            await self._post(
+            ok = await self._post(
                 {
                     "from": emisor,
                     **destino,
@@ -143,6 +150,9 @@ class YCloud:
                     "text": {"body": chunk[:4000]},
                 }
             )
+            if ok is None:
+                ok_total = False
+        return ok_total
 
     # ----------------------------------------------------------- imagen ---
     @staticmethod
