@@ -646,7 +646,10 @@ function porQueDe(e){ return (e.motivos||[]).map(m=>MOTIVOS[m]?MOTIVOS[m].e:m).j
 async function pollEvents(){ try{ const d=await api('/events?after='+lastEventId);
     if(d.eventos&&d.eventos.length){ lastEventId=d.ultimo_id; let tocaSel=false;
       for(const e of d.eventos){ alerts.unshift(e); if(alerts.length>400)alerts.pop(); if(ALERTA.includes(e.kind))alertCount++; if(e.chat_id===selChat)tocaSel=true; if(notifPrimed)notificarEvento(e); }
-      renderBadge(); renderFeed(); if(tocaSel)openChat(selChat); }
+      renderBadge(); renderFeed(); if(tocaSel)openChat(selChat);
+      // Refrescar la LISTA al instante: antes sólo se recargaba cada 10s, así que
+      // un chat nuevo tardaba en aparecer y a veces había que actualizar a mano.
+      loadChats(); }
     $('#hdot').classList.remove('bad');
   }catch(e){ $('#hdot').classList.add('bad'); } }
 function renderBadge(){ const b=$('#badge'); if(alertCount>0){b.style.display='block';b.textContent=alertCount;}else b.style.display='none'; }
@@ -855,7 +858,9 @@ async function boot(){ renderFiltros(); tick(); setInterval(tick,20000); pintarT
   }catch(e){}
   await loadGlobal(); await loadChats(); await pollEvents();
   notifPrimed=true;
-  clearInterval(window._t1); clearInterval(window._t2); window._t1=setInterval(pollEvents,3000); window._t2=setInterval(loadChats,10000);
+  // Eventos cada 2s (de ahí sale el refresco en vivo de la lista); el recargado
+  // completo cada 15s queda sólo de respaldo por si se perdió algún evento.
+  clearInterval(window._t1); clearInterval(window._t2); window._t1=setInterval(pollEvents,2000); window._t2=setInterval(loadChats,15000);
 }
 boot();
 </script>

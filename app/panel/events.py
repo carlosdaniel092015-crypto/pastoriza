@@ -112,12 +112,18 @@ async def tocar_chatmeta(
     ad_producto: str = "",
 ) -> None:
     # La info del anuncio se setea en el primer mensaje (referral); en los turnos
-    # siguientes no llega, así que la preservamos leyendo la meta previa.
-    if not ad_id:
+    # siguientes no llega, así que la preservamos leyendo la meta previa. Lo mismo
+    # con nombre/teléfono/emisor: un mensaje sin perfil no debe BORRAR lo que ya
+    # sabíamos del cliente (pasa al registrar el entrante apenas llega).
+    if not (ad_id and user_name and telefono and emisor):
         prev = await leer_chatmeta(chat_id)
-        ad_id = prev.get("ad_id", "") or ""
+        ad_id = ad_id or prev.get("ad_id", "") or ""
         ad_headline = ad_headline or prev.get("ad_headline", "") or ""
         ad_producto = ad_producto or prev.get("ad_producto", "") or ""
+        user_name = user_name or prev.get("user_name", "") or ""
+        telefono = telefono or prev.get("telefono", "") or ""
+        emisor = emisor or prev.get("emisor", "") or ""
+        destino = destino or prev.get("destino") or None
 
     meta = {
         "chat_id": chat_id,
