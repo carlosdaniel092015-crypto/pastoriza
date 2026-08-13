@@ -132,6 +132,23 @@ app.add_middleware(
 app.include_router(panel_router)
 
 
+@app.exception_handler(Exception)
+async def _log_excepcion_no_manejada(request: Request, exc: Exception) -> JSONResponse:
+    """Red de seguridad: cualquier excepción no manejada en un endpoint queda
+    logueada en JSON (con traceback) en vez de perderse en el log genérico de
+    Starlette. Así 'saber si algo explota' no depende de recordar dónde mirar.
+    Las HTTPException (401/404/…) siguen su curso normal: no pasan por aquí.
+    """
+    log.error(
+        "request_no_manejado",
+        ruta=str(request.url.path),
+        metodo=request.method,
+        error=str(exc),
+        exc_info=exc,
+    )
+    return JSONResponse({"ok": False, "error": "internal"}, status_code=500)
+
+
 # ------------------------------------------------------------- webhook ---
 @app.post("/webhook/ycloud")
 async def webhook_ycloud(
