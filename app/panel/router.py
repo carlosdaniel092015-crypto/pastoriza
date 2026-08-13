@@ -6,6 +6,7 @@ se permite todo (solo para desarrollo local).
 from __future__ import annotations
 
 import hmac
+import json
 import secrets
 import time
 from pathlib import Path
@@ -176,6 +177,41 @@ async def _chat_ids_de_sesiones() -> list[str]:
     return [k[len(prefijo):] for k in keys]
 
 
+async def _ultimo_del_historial(chat_id: str, respaldo: str = "") -> tuple[str, str]:
+    """(texto, quién) del último mensaje real de la conversación, leído del historial.
+
+    Se usa para las conversaciones que ya existían antes de guardar `ultimo_de`.
+    Devuelve `respaldo` si no se puede leer: nunca rompe la lista de chats.
+    """
+    try:
+        items = await RedisSession(chat_id).get_items(limit=6)
+    except Exception:  # noqa: BLE001
+        return (respaldo, "cliente")
+    for it in reversed(items or []):
+        if str(it.get("type", "")).startswith("function_call"):
+            continue  # las llamadas a tools no son mensajes
+        contenido = it.get("content")
+        if isinstance(contenido, list):
+            contenido = " ".join(
+                str((x or {}).get("text") or (x or {}).get("content") or "")
+                for x in contenido
+            )
+        texto = str(contenido or "").strip()
+        if not texto:
+            continue
+        if texto.startswith("{"):  # salida estructurada del agente
+            try:
+                texto = str(json.loads(texto).get("mensaje") or texto)
+            except Exception:  # noqa: BLE001
+                pass
+        if texto.startswith("[SUPERVISOR]"):
+            return (texto.replace("[SUPERVISOR]", "").strip()[:200], "asesor")
+        if it.get("role") == "user":
+            return (texto[:200], "cliente")
+        return (texto[:200], "bot")
+    return (respaldo, "cliente")
+
+
 @panel_router.get("/api/chats")
 async def api_chats(x_panel_token: str | None = Header(default=None)) -> dict:
     _auth(x_panel_token)
@@ -185,13 +221,20 @@ async def api_chats(x_panel_token: str | None = Header(default=None)) -> dict:
     for cid in ids:
         m = meta.get(cid, {})
         pausado = await bot_pausado(cid)
+        ultimo = m.get("ultimo", "")
+        ultimo_de = m.get("ultimo_de", "")
+        if not ultimo_de:
+            # Conversación anterior a que se guardara quién habló último (o sin meta):
+            # lo deducimos del historial para que la lista sea correcta YA, sin
+            # esperar a que llegue un mensaje nuevo.
+            ultimo, ultimo_de = await _ultimo_del_historial(cid, ultimo)
         chats.append(
             {
                 "chat_id": cid,
                 "user_name": m.get("user_name", ""),
                 "telefono": m.get("telefono", ""),
-                "ultimo": m.get("ultimo", ""),
-                "ultimo_de": m.get("ultimo_de", "cliente"),
+                "ultimo": ultimo,
+                "ultimo_de": ultimo_de or "cliente",
                 "ultimo_ts": m.get("ultimo_ts", 0),
                 "pausado": pausado,
             }
