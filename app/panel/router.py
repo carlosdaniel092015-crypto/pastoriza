@@ -324,13 +324,13 @@ async def api_responder(
 # Cache transitorio en memoria: el supervisor sube una imagen desde el panel y
 # YCloud la fetchea de /panel/media/{token} para reenviarla al cliente. 1 worker
 # (ver Dockerfile), así que un dict por proceso alcanza; se acota para no crecer.
-_MEDIA_CACHE: dict[str, bytes] = {}
+_MEDIA_CACHE: dict[str, tuple[str, bytes]] = {}  # token -> (content_type, bytes)
 _MEDIA_MAX = 50
 
 
-def _media_guardar(jpg: bytes) -> str:
+def _media_guardar(data: bytes, content_type: str) -> str:
     token = secrets.token_urlsafe(16)
-    _MEDIA_CACHE[token] = jpg
+    _MEDIA_CACHE[token] = (content_type, data)
     while len(_MEDIA_CACHE) > _MEDIA_MAX:
         _MEDIA_CACHE.pop(next(iter(_MEDIA_CACHE)))
     return token
@@ -338,14 +338,15 @@ def _media_guardar(jpg: bytes) -> str:
 
 @panel_router.get("/media/{token}")
 async def serve_media(token: str) -> Response:
-    """Sirve una imagen subida por el supervisor. PÚBLICA (sin token): YCloud la
-    fetchea sin auth, igual que /img. Transitoria (en memoria)."""
-    jpg = _MEDIA_CACHE.get(str(token).split(".")[0])
-    if jpg is None:
+    """Sirve un archivo (imagen/audio) subido por el supervisor. PÚBLICA (sin
+    token): YCloud lo fetchea sin auth, igual que /img. Transitorio (en memoria)."""
+    entry = _MEDIA_CACHE.get(str(token).split(".")[0])
+    if entry is None:
         raise HTTPException(status_code=404, detail="media no encontrada")
+    ctype, data = entry
     return Response(
-        content=jpg,
-        media_type="image/jpeg",
+        content=data,
+        media_type=ctype,
         headers={"Cache-Control": "public, max-age=3600"},
     )
 
@@ -375,7 +376,7 @@ async def api_responder_imagen(
         log.warning("panel_imagen_convertir_fallo", chat_id=chat_id, error=str(exc))
         raise HTTPException(status_code=400, detail="el archivo no es una imagen válida.")
 
-    token = _media_guardar(jpg)
+    token = _media_guardar(jpg, "image/jpeg")
     url = f"{settings.base_url}/panel/media/{token}.jpg"
     cap = (caption or "").strip()
 
@@ -393,6 +394,55 @@ async def api_responder_imagen(
     )
     await events.publicar(
         "manual", chat_id, detalle=etiqueta[:200], enviado=bool(enviado),
+        user_name=meta.get("user_name", ""),
+    )
+    return {"ok": True, "enviado": bool(enviado), "pausado": True}
+
+
+# mime del navegador -> extensión que le ponemos a la URL (WhatsApp mira ambos).
+_AUDIO_EXT = {
+    "audio/ogg": "ogg", "audio/opus": "ogg", "audio/webm": "webm",
+    "audio/mpeg": "mp3", "audio/mp4": "mp4", "audio/aac": "aac", "audio/amr": "amr",
+}
+
+
+@panel_router.post("/api/chats/{chat_id}/responder-audio")
+async def api_responder_audio(
+    chat_id: str,
+    file: UploadFile = File(...),
+    x_panel_token: str | None = Header(default=None),
+) -> dict:
+    """Respuesta manual con NOTA DE VOZ. Igual que /responder: pausa el bot 30
+    min, la manda por YCloud y la registra en el historial.
+
+    Nota: el navegador suele grabar en webm/opus; WhatsApp prefiere ogg/opus. Si
+    algún cliente no reproduce el audio, habría que convertir en el server (ffmpeg)."""
+    _auth(x_panel_token)
+    if not settings.base_url:
+        raise HTTPException(
+            status_code=400,
+            detail="PUBLIC_BASE_URL no configurado: YCloud no podría buscar el audio.",
+        )
+    data = await file.read()
+    if not data or len(data) > 16 * 1024 * 1024:
+        raise HTTPException(status_code=400, detail="audio vacío o muy grande (máx 16 MB).")
+    ctype = (file.content_type or "audio/ogg").split(";")[0].strip().lower()
+    ext = _AUDIO_EXT.get(ctype, "ogg")
+    token = _media_guardar(data, ctype)
+    url = f"{settings.base_url}/panel/media/{token}.{ext}"
+
+    meta = await events.leer_chatmeta(chat_id)
+    emisor = meta.get("emisor") or settings.ycloud_from
+    destino = meta.get("destino") or {"to": chat_id}
+
+    enviado = await ycloud.enviar_audio(destino, emisor, url)
+
+    await pausar_bot(chat_id)
+    await RedisSession(chat_id).add_items(
+        [{"role": "assistant", "content": "[SUPERVISOR] (nota de voz)"}]
+    )
+    await events.publicar(
+        "manual", chat_id, detalle="(nota de voz)", enviado=bool(enviado),
         user_name=meta.get("user_name", ""),
     )
     return {"ok": True, "enviado": bool(enviado), "pausado": True}

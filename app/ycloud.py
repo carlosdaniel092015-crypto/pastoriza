@@ -210,6 +210,20 @@ class YCloud:
             if i < len(items) - 1:
                 await asyncio.sleep(2 + random.random() * 0.5)
 
+    # ----------------------------------------------------------- audio ---
+    async def enviar_audio(self, destino: dict, emisor: str, url: str) -> bool:
+        """Manda una nota de voz. `url` debe ser pública (YCloud la fetchea)."""
+        ok = await self._post(
+            {
+                "from": emisor,
+                **destino,
+                "type": "audio",
+                "audio": {"link": url},
+            },
+            intentos=3,
+        )
+        return ok is not None
+
     # --------------------------------------------------------- plantilla ---
     async def enviar_plantilla(
         self, telefono: str, emisor: str, nombre: str, parametros: list[str]
