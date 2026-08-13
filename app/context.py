@@ -37,6 +37,12 @@ class ConversationContext:
 
     # --- enrutado multi-agente (qué especialista atendió este turno) ---
     agente: str = ""
+    # Visto bueno del DETERMINADOR (app/agents/enrutador.py) para pasar a un humano.
+    # False = el bot debe resolverlo: `escalar_a_humano` queda bloqueada y también se
+    # ignora un `escalar=True` que venga del modelo. Evita escalar saludos, "ok",
+    # precios o envíos, que el bot sí puede responder.
+    permite_escalar: bool = False
+    motivo_determinador: str = ""
 
     # --- efectos escritos por las tools (fuente de verdad) ---
     order_id: int | None = None

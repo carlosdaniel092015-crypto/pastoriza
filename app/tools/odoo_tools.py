@@ -356,13 +356,34 @@ async def escalar_a_humano(
 ) -> str:
     """Pasa la conversación a una persona del equipo.
 
-    Úsala si el cliente lo pide, si hay una queja seria, o si algo se traba.
+    ÚSALA SÓLO si el cliente pide explícitamente hablar con alguien, quiere cancelar o
+    quitar algo de un pedido, hay una queja seria, o hay insultos/abuso. Para precios,
+    medidas, envío, ubicación, pago, disponibilidad, fotos, saludos o "ok": NO la uses,
+    eso lo resuelves tú.
 
     Args:
         motivo: Motivo breve, para el aviso interno.
     """
-    ctx.context.escalar = True
-    ctx.context.marcar_revision(f"handoff: {motivo}")
+    c = ctx.context
+    # CANDADO (invariante): la escalada la habilita el DETERMINADOR, no el modelo.
+    # Sin visto bueno no se escala, aunque el modelo insista: llegó a pasarle al
+    # supervisor un simple SALUDO ("Hola, buenas tardes, cómo estás").
+    if not c.permite_escalar:
+        log.warning(
+            "escalada_bloqueada",
+            chat_id=c.chat_id,
+            motivo=motivo,
+            determinador=c.motivo_determinador,
+        )
+        c.marcar_revision("escalada_bloqueada")
+        return (
+            "NO_ESCALAR: esto no amerita un asesor; lo resuelves tú. Si no tienes el "
+            "dato exacto, pregúntale con amabilidad qué necesita (medida, tipo, "
+            "cantidad) u ofrécele el catálogo. NO le digas que avisaste a un "
+            "supervisor ni que alguien lo va a contactar."
+        )
+    c.escalar = True
+    c.marcar_revision(f"handoff: {motivo}")
     return (
         "OK: el equipo fue notificado. Dile al cliente que un asesor se comunica "
         "en breve. No sigas intentando resolverlo tú."

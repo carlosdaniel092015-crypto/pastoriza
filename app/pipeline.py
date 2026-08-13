@@ -14,7 +14,7 @@ import traceback
 
 from agents import MaxTurnsExceeded, Runner
 
-from app.agents import ESPECIALISTAS, RespuestaBot, elegir_agente
+from app.agents import ESPECIALISTAS, RespuestaBot, analizar_contexto
 from app.business_config import get_producto_de_anuncio, load_config
 from app.catalogo import catalogo
 from app.context import ConversationContext
@@ -451,9 +451,13 @@ async def _correr_agente(
     texto: str, ctx: ConversationContext
 ) -> RespuestaBot | None:
     session = RedisSession(ctx.chat_id)
-    # Enrutado determinista-first: elige el especialista y corre SOLO ese.
-    nombre = await elegir_agente(texto, ctx, session)
+    # DETERMINADOR: elige el especialista Y decide si el caso amerita una persona.
+    # `permite_escalar` es lo que habilita `escalar_a_humano` (ver odoo_tools).
+    veredicto = await analizar_contexto(texto, ctx, session)
+    nombre = veredicto.agente
     ctx.agente = nombre
+    ctx.permite_escalar = veredicto.permite_escalar
+    ctx.motivo_determinador = veredicto.motivo
     log.info("agente_elegido", chat_id=ctx.chat_id, agente=nombre)
     try:
         result = await asyncio.wait_for(
@@ -574,7 +578,17 @@ async def _efectos(
             f"{ctx.telefono or ctx.chat_id} | Comprobante: {ctx.imagen_url or '-'}",
         )
 
-    # 3. Handoff a humano.
+    # 3. Handoff a humano. El modelo también puede pedirlo por su salida
+    # (respuesta.escalar), saltándose la tool: ese camino pasa por el MISMO candado
+    # del determinador. `ctx.escalar` sólo lo pone la tool (ya validada) o el
+    # anti-repetición, que es determinista.
+    if respuesta.escalar and not ctx.escalar and not ctx.permite_escalar:
+        log.warning(
+            "escalada_modelo_bloqueada",
+            chat_id=ctx.chat_id, determinador=ctx.motivo_determinador,
+        )
+        ctx.marcar_revision("escalada_bloqueada")
+        respuesta.escalar = False
     if ctx.escalar or respuesta.escalar:
         ctx.marcar_revision("handoff")
         await ycloud.enviar_plantilla(

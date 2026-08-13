@@ -67,6 +67,27 @@ RE_ENVIO = _R(r"\b(cuanto (cuesta|es|vale) el envio|precio del envio|costo del e
               r"hacen (envios|delivery)|como (funciona|es) el envio)\b")
 RE_SALUDO = _R(r"^(hola+|hey|buenas|buenos dias|buenas tardes|buenas noches|que tal|"
                r"saludos|ola|klk|qlq|ke lo ke|epa|epale|dime|dimelo)[\s!.,]*$")
+
+# Piezas de cortesía: si al quitarlas TODAS no queda nada con contenido, el mensaje
+# es sólo un saludo. Necesario porque la ráfaga se combina en un solo texto
+# ("Hola" + "Buenas tardes cómo estás" -> "hola\nbuenas tardes como estas") y el
+# regex de arriba, anclado con ^...$, ya no matcheaba: el turno se iba al modelo,
+# que llegó a escalar un SALUDO al supervisor.
+_PIEZAS_SALUDO = _R(
+    r"\b(hola+|hey+|hi|hello|buenas?|buenos?|dia|dias|tarde|tardes|noche|noches|"
+    r"que|tal|saludos|ola|klk|qlq|ke|lo|epa|epale|como|estas|esta|andas|anda|"
+    r"todo|bien|dime|dimelo|senorita|senora|senor|amigo|amiga|joven|disculpe|"
+    r"por|favor|usted|ustedes|dios|bendiciones|feliz)\b"
+)
+
+
+def es_solo_saludo(norm: str) -> bool:
+    """True si el texto es SÓLO saludo/cortesía (sin ninguna intención de compra)."""
+    if not norm or len(norm) > 120:  # un saludo no es un párrafo
+        return False
+    resto = _PIEZAS_SALUDO.sub(" ", norm)
+    resto = re.sub(r"[^a-z0-9]+", " ", resto)
+    return not resto.strip()
 RE_CIERRE = _R(r"^(gracias|muchas gracias|mil gracias|ok gracias|okay gracias|"
                r"listo gracias|perfecto gracias|hasta luego|nos vemos|chao|adios|bye|"
                r"eso es todo|nada mas)[\s!.,]*$")
@@ -158,7 +179,7 @@ def respuesta_directa(
             "las opciones. Si prefieres, te muestro todo el catalogo."
         )
 
-    if RE_SALUDO.match(norm):
+    if RE_SALUDO.match(norm) or es_solo_saludo(norm):
         # Desde un anuncio, el saludo lo da el agente (sabe de qué producto viene).
         return None if viene_de_anuncio else random.choice(SALUDOS)
 

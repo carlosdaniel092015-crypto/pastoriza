@@ -83,6 +83,9 @@ async def test_pedido_con_comprobante_lo_adjunta(monkeypatch):
 async def test_handoff_envia_plantilla_y_mensaje(monkeypatch):
     yc, _pe, _enc = _mockear(monkeypatch)
     ctx = ctx_nuevo()
+    # El cliente PIDE una persona: el determinador da el visto bueno. Sin él, la
+    # escalada queda bloqueada a propósito (ver el test de abajo).
+    ctx.permite_escalar = True
     trigger = InboundMessage(content="quiero hablar con una persona")
 
     await pipeline._efectos(
@@ -92,3 +95,19 @@ async def test_handoff_envia_plantilla_y_mensaje(monkeypatch):
     assert "handoff" in ctx.motivo_revision
     yc.enviar_plantilla.assert_awaited()
     yc.enviar_texto.assert_awaited()
+
+
+async def test_handoff_bloqueado_si_el_determinador_no_lo_habilita(monkeypatch):
+    """El modelo puede pedir escalada por su salida (sin usar la tool): ese camino
+    pasa por el mismo candado. Caso real: llegó a escalar un SALUDO al supervisor."""
+    yc, _pe, _enc = _mockear(monkeypatch)
+    ctx = ctx_nuevo()  # permite_escalar = False (default)
+    trigger = InboundMessage(content="hola buenas tardes como estas")
+
+    await pipeline._efectos(
+        ctx, RespuestaBot(mensaje="ok", escalar=True), "ok", trigger
+    )
+
+    assert "handoff" not in ctx.motivo_revision
+    assert "escalada_bloqueada" in ctx.motivo_revision
+    yc.enviar_plantilla.assert_not_awaited()  # el supervisor NO fue molestado
