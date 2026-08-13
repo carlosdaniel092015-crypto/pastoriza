@@ -99,6 +99,11 @@ def score(busqueda: str, nombre: str) -> int:
                 sc += 4
             elif t in TIPOS:
                 sc += 1
+            elif t.isdigit():
+                # Número suelto (sin unidad): pista débil. Evita que "5 libras"
+                # surfacee "5 GALONES" solo por compartir el "5". Las capacidades
+                # con unidad puntúan aparte (via caps, +8).
+                sc += 1
             else:
                 sc += 2
 
