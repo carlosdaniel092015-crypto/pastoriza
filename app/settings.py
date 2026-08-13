@@ -105,6 +105,13 @@ class Settings(BaseSettings):
     analista_auto: bool = True
     analista_intervalo_horas: int = 24  # cada cuánto corre el análisis
 
+    # ---------- Canario de producción ----------
+    # El bot se vigila a sí mismo (catálogo, Redis, pico de escaladas) y avisa por
+    # Telegram cuando algo se rompe. Sólo lee: no toca el flujo de venta.
+    canario_activo: bool = True
+    canario_intervalo_minutos: int = 10
+    canario_max_escaladas_hora: int = 15
+
     # ---------- Migración gradual ----------
     # Si tiene contenido, SOLO estos números se procesan acá (el resto lo ignora
     # este servicio y lo sigue atendiendo n8n). Separados por coma.
