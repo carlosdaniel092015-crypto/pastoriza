@@ -11,6 +11,7 @@ from app.logging_conf import get_logger
 from app.matching import score_ficha
 from app.media import ficha_visual_de_url
 from app.odoo import odoo
+from app.settings import settings
 
 log = get_logger(__name__)
 
