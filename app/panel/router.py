@@ -197,7 +197,9 @@ async def api_chat_hilo(
     chat_id: str, x_panel_token: str | None = Header(default=None)
 ) -> dict:
     _auth(x_panel_token)
-    items = await RedisSession(chat_id).get_items()
+    # Items CRUDOS con su índice real (`_idx`): el panel permite editar/borrar
+    # mensajes y necesita la posición exacta en Redis, no la de la lista saneada.
+    items = await RedisSession(chat_id).items_con_indice()
     meta = await events.leer_chatmeta(chat_id)
     return {
         "chat_id": chat_id,
@@ -205,6 +207,81 @@ async def api_chat_hilo(
         "meta": meta,
         "items": items,
     }
+
+
+@panel_router.patch("/api/chats/{chat_id}/mensajes/{indice}")
+async def api_mensaje_editar(
+    chat_id: str, indice: int, request: Request,
+    x_panel_token: str | None = Header(default=None),
+) -> dict:
+    """Corrige el texto de un mensaje del historial (lo que el bot recuerda).
+
+    No reenvía nada al cliente: sólo cambia la memoria de la conversación.
+    """
+    _auth(x_panel_token)
+    data = await request.json()
+    texto = str(data.get("texto", "")).strip()
+    if not texto:
+        raise HTTPException(status_code=400, detail="texto requerido")
+    ok = await RedisSession(chat_id).editar_item(indice, texto)
+    if not ok:
+        raise HTTPException(status_code=404, detail="no se encontró ese mensaje")
+    log.info("mensaje_editado", chat_id=chat_id, indice=indice)
+    await events.publicar("control", chat_id, detalle="mensaje corregido en el historial")
+    return {"ok": True}
+
+
+@panel_router.delete("/api/chats/{chat_id}/mensajes/{indice}")
+async def api_mensaje_borrar(
+    chat_id: str, indice: int, x_panel_token: str | None = Header(default=None)
+) -> dict:
+    """Saca un mensaje del historial (ej. una respuesta mala del bot) para que no
+    lo repita ni lo confunda. No borra nada en WhatsApp."""
+    _auth(x_panel_token)
+    ok = await RedisSession(chat_id).borrar_item(indice)
+    if not ok:
+        raise HTTPException(status_code=404, detail="no se encontró ese mensaje")
+    log.info("mensaje_borrado", chat_id=chat_id, indice=indice)
+    await events.publicar("control", chat_id, detalle="mensaje borrado del historial")
+    return {"ok": True}
+
+
+@panel_router.delete("/api/chats/{chat_id}/memoria")
+async def api_memoria_limpiar(
+    chat_id: str, x_panel_token: str | None = Header(default=None)
+) -> dict:
+    """Reinicia la memoria: el bot arranca de cero con este cliente. La conversación
+    sigue en el panel (no se borra el chat, sólo lo que el bot recuerda)."""
+    _auth(x_panel_token)
+    await RedisSession(chat_id).clear_session()
+    log.info("memoria_limpiada", chat_id=chat_id)
+    await events.publicar("control", chat_id, detalle="memoria del chat reiniciada")
+    return {"ok": True}
+
+
+@panel_router.post("/api/chats/{chat_id}/nota")
+async def api_nota_interna(
+    chat_id: str, request: Request, x_panel_token: str | None = Header(default=None)
+) -> dict:
+    """Agrega contexto para el BOT (no se le manda al cliente).
+
+    Ej: "este cliente es mayorista, cotízale por volumen". El bot lo lee en el
+    próximo turno como parte del historial.
+    """
+    _auth(x_panel_token)
+    data = await request.json()
+    texto = str(data.get("texto", "")).strip()
+    if not texto:
+        raise HTTPException(status_code=400, detail="texto requerido")
+    await RedisSession(chat_id).add_items([{
+        "role": "assistant",
+        "content": (
+            f"[NOTA INTERNA del supervisor — NO se la menciones al cliente] {texto}"
+        ),
+    }])
+    log.info("nota_interna", chat_id=chat_id)
+    await events.publicar("control", chat_id, detalle=f"nota para el bot: {texto[:120]}")
+    return {"ok": True}
 
 
 @panel_router.delete("/api/chats/{chat_id}")

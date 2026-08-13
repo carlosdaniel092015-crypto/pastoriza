@@ -102,8 +102,12 @@ class TestTroceo:
     def test_texto_corto_es_un_solo_mensaje(self):
         assert YCloud.trocear("Hola, en qué te ayudo?") == ["Hola, en qué te ayudo?"]
 
-    def test_parrafos_se_separan(self):
-        assert len(YCloud.trocear("Primero.\n\nSegundo.\n\nTercero.")) == 3
+    def test_varios_parrafos_van_en_UN_solo_mensaje(self):
+        # Un turno = un mensaje de WhatsApp. Antes esto salía como 3 burbujas
+        # seguidas y el cliente veía un chorro de mensajes.
+        assert YCloud.trocear("Primero.\n\nSegundo.\n\nTercero.") == [
+            "Primero.\n\nSegundo.\n\nTercero."
+        ]
 
     def test_lista_numerada_no_se_fragmenta(self):
         lista = "Catálogo:\n" + "\n".join(f"{i}. Producto {i}" for i in range(1, 11))
@@ -111,11 +115,15 @@ class TestTroceo:
         assert len(chunks) == 1
         assert "10. Producto 10" in chunks[0]
 
-    def test_parrafo_largo_se_corta_por_oracion(self):
+    def test_solo_se_parte_si_excede_el_limite_del_canal(self):
+        # Un texto largo pero por debajo del tope sigue siendo UN mensaje...
         largo = " ".join(["Esta es una oración de prueba."] * 30)
-        chunks = YCloud.trocear(largo)
+        assert len(YCloud.trocear(largo)) == 1
+        # ...y sólo se parte cuando excede lo que acepta WhatsApp.
+        enorme = "\n".join(["Linea de texto de prueba."] * 400)
+        chunks = YCloud.trocear(enorme)
         assert len(chunks) > 1
-        assert all(len(c) <= 400 for c in chunks)
+        assert all(len(c) <= 3500 for c in chunks)
 
     def test_vacio(self):
         assert YCloud.trocear("   ") == []

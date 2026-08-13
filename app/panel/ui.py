@@ -118,7 +118,12 @@ PANEL_HTML = r"""<!doctype html>
   .row{display:flex;flex-direction:column;max-width:66%}
   .row.l{align-self:flex-start;align-items:flex-start}
   .row.r{align-self:flex-end;align-items:flex-end}
-  .bub{padding:11px 15px;border-radius:10px;white-space:pre-wrap;word-wrap:break-word;font-size:14.5px;line-height:1.5}
+  .bub{padding:11px 15px;border-radius:10px;white-space:pre-wrap;word-wrap:break-word;font-size:14.5px;line-height:1.5;position:relative}
+  /* Acciones por mensaje (corregir / borrar del historial): discretas, aparecen al pasar el mouse. */
+  .msgacc{position:absolute;top:2px;right:4px;display:none;gap:2px}
+  .bub:hover .msgacc{display:flex}
+  .msgacc button{background:transparent;border:0;color:var(--mut);cursor:pointer;font-size:13px;line-height:1;padding:2px 4px;border-radius:4px}
+  .msgacc button:hover{color:var(--tx);background:rgba(127,127,127,.18)}
   .bub.user{background:var(--panel);border-radius:10px 10px 10px 3px}
   .bub.bot{background:var(--panel2);border-left:3px solid var(--senal);border-radius:10px 10px 3px 10px}
   .bub.super{background:var(--panel2);border-left:3px solid var(--cinta);border-radius:10px 10px 3px 10px}
@@ -526,6 +531,8 @@ async function openChat(id){
       <button class="abtn" onclick="toggleBot('${id}',${d.pausado})">${d.pausado?'Reactivar bot':'Pausar para este cliente'}</button>
       <button class="abtn" onclick="marcarRevision('${id}')">Marcar para revisión</button>
       <button class="abtn mut" onclick="toggleReply()">Responder</button>
+      <button class="abtn mut" onclick="notaBot('${id}')">Nota para el bot</button>
+      <button class="abtn mut" onclick="limpiarMemoria('${id}')">Limpiar memoria</button>
       <button class="abtn mut" onclick="exportar('${id}')">Exportar</button>
       <button class="abtn mut" onclick="eliminarChat('${id}')">Eliminar</button>
     </div>`;
@@ -544,17 +551,39 @@ function renderMsgs(items){
     const tipo=it.type||'';
     if(tipo.indexOf('function_call')>=0||tipo==='tool'||it.role==='tool'){ const n=it.name||it.tool||'acción'; return `<div class="tool">⌁ ${esc(n)} ▾</div>`; }
     const role=it.role||'assistant'; let raw=contenidoStr(it.content);
-    if(role==='user') return `<div class="row l"><div class="bub user">${esc(raw)}</div><div class="btime">${fmtTime(it.ts)}</div></div>`;
+    const idx=(it._idx!==undefined&&it._idx!==null)?it._idx:-1;
+    const acc=idx>=0?`<span class="msgacc"><button title="Corregir en el historial" onclick="editarMsg(${idx})">✎</button><button title="Borrar del historial" onclick="borrarMsg(${idx})">×</button></span>`:'';
+    if(role==='user') return `<div class="row l"><div class="bub user">${esc(raw)}${acc}</div><div class="btime">${fmtTime(it.ts)}</div></div>`;
     let msg=raw,chips=[],escal=false,sup=false;
     if(raw.startsWith('[SUPERVISOR]')){ sup=true; msg=raw.replace('[SUPERVISOR]','').trim(); }
     else if(raw.trim().startsWith('{')){ try{ const o=JSON.parse(raw); if(o&&typeof o.mensaje==='string'){ msg=o.mensaje; chips=o.mostrar_productos||[]; escal=!!o.escalar; } }catch(e){} }
     let ch='';
     if(chips.length){ ch='<div class="pchips">'+chips.map(id=>{ const p=prodMap[id]; return `<div class="pchip"><span class="sku">#${esc(String(id))}</span><span class="pn">${p?esc(p.nombre):'producto '+id}</span>${p?`<span class="pp">RD$ ${Number(p.precio).toFixed(2)}</span>`:''}</div>`; }).join('')+'</div>'; }
     const badge=escal?'<span class="badge-esc">Pasado a un asesor</span>':'';
-    return `<div class="row r"><div class="bub ${sup?'super':'bot'}">${badge}${esc(msg)}${ch}</div><div class="btime">${fmtTime(it.ts)}</div></div>`;
+    return `<div class="row r"><div class="bub ${sup?'super':'bot'}">${badge}${esc(msg)}${ch}${acc}</div><div class="btime">${fmtTime(it.ts)}</div></div>`;
   }).join('');
   el.scrollTop=el.scrollHeight;
 }
+async function editarMsg(idx){ if(!selChat)return;
+  const actual=(curItems.find(i=>i._idx===idx)||{}); let txt=contenidoStr(actual.content);
+  if(txt.trim().startsWith('{')){ try{ txt=JSON.parse(txt).mensaje||txt; }catch(e){} }
+  const nuevo=prompt('Corregir este mensaje en la memoria del bot (no se reenvía al cliente):', txt);
+  if(nuevo===null||!nuevo.trim())return;
+  try{ await api('/chats/'+encodeURIComponent(selChat)+'/mensajes/'+idx,{method:'PATCH',body:JSON.stringify({texto:nuevo})}); openChat(selChat); }
+  catch(e){ alert('No se pudo corregir: '+e); } }
+async function borrarMsg(idx){ if(!selChat)return;
+  if(!confirm('¿Borrar este mensaje del historial? El bot deja de recordarlo (no se borra en WhatsApp).'))return;
+  try{ await api('/chats/'+encodeURIComponent(selChat)+'/mensajes/'+idx,{method:'DELETE'}); openChat(selChat); }
+  catch(e){ alert('No se pudo borrar: '+e); } }
+async function limpiarMemoria(id){
+  if(!confirm('¿Reiniciar la memoria de este chat? El bot arranca de cero con este cliente (la conversación sigue visible acá).'))return;
+  try{ await api('/chats/'+encodeURIComponent(id)+'/memoria',{method:'DELETE'}); openChat(id); }
+  catch(e){ alert('No se pudo limpiar: '+e); } }
+async function notaBot(id){
+  const t=prompt('Nota interna para el bot (el cliente NO la ve).\\nEj: "este cliente es mayorista, cotízale por volumen"');
+  if(t===null||!t.trim())return;
+  try{ await api('/chats/'+encodeURIComponent(id)+'/nota',{method:'POST',body:JSON.stringify({texto:t})}); openChat(id); }
+  catch(e){ alert('No se pudo guardar la nota: '+e); } }
 async function toggleBot(id,p){ await api('/chats/'+encodeURIComponent(id)+(p?'/reactivar':'/pausar'),{method:'POST'}); openChat(id); loadChats(); }
 async function marcarRevision(id){ await api('/chats/'+encodeURIComponent(id)+'/revisar',{method:'POST'}); alert('Marcado para revisión.'); loadStats(); }
 function toggleReply(){ const i=$('#rin'); if(i)i.focus(); }

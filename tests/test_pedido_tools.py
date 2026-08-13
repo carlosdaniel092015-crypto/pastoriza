@@ -10,6 +10,7 @@ import pytest
 
 from app.tools.odoo_tools import (
     datos_envio_faltantes,
+    nombre_no_valido,
     nota_entrega,
     precio_blindado,
 )
@@ -62,3 +63,25 @@ class TestNotaEntrega:
         assert "Provincia: SD" in nota
         assert "No. casa/edificio: 12" in nota
         assert "Referencia: frente al colmado" in nota
+
+
+class TestNombreDelCliente:
+    """El contacto queda en Odoo para siempre: no se crea con el alias de WhatsApp.
+
+    Caso real: el bot registró el pedido 160 a nombre de "la patrona RD Hija Rey 🎉"
+    sin preguntarle el nombre al cliente.
+    """
+
+    def test_alias_de_whatsapp_se_rechaza(self):
+        assert nombre_no_valido("la patrona RD Hija Rey", "la patrona RD Hija Rey")
+
+    def test_emojis_se_rechazan(self):
+        assert nombre_no_valido("Yoma 🎉🎉", "otro")
+
+    def test_vacio_se_rechaza(self):
+        assert nombre_no_valido("", "otro")
+
+    def test_nombre_real_se_acepta(self):
+        assert nombre_no_valido("Juan Pérez", "la patrona RD") == ""
+        assert nombre_no_valido("Yoselin", "la patrona RD") == ""
+        assert nombre_no_valido("María de los Ángeles", "x") == ""
