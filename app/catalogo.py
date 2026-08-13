@@ -91,15 +91,19 @@ class Catalogo:
             t for t in tmpls
             if t.get("is_published") is True and t.get("image_128")
         ]
-        # Regla de negocio: SOLO productos CON stock disponible (el cliente maneja
-        # stock real). Evita ofrecer/matchear un envase agotado. Desactivable con
-        # SOLO_CON_STOCK=false si el dato de stock no fuera confiable.
+        # Filtro por stock (SOLO_CON_STOCK): oculta agotados. FAIL-SAFE: si dejaría
+        # el catálogo VACÍO (qty_available no es confiable en este Odoo, llega 0/None),
+        # NO se aplica, para no dejar al bot sin productos. Apagado por defecto.
         if settings.solo_con_stock:
-            antes = len(tmpls)
-            tmpls = [t for t in tmpls if float(t.get("qty_available") or 0) > 0]
-            filtrados = antes - len(tmpls)
-            if filtrados:
-                log.info("catalogo_filtro_stock", con_stock=len(tmpls), sin_stock=filtrados)
+            con_stock = [t for t in tmpls if float(t.get("qty_available") or 0) > 0]
+            if con_stock:
+                log.info(
+                    "catalogo_filtro_stock",
+                    con_stock=len(con_stock), sin_stock=len(tmpls) - len(con_stock),
+                )
+                tmpls = con_stock
+            else:
+                log.warning("catalogo_filtro_stock_vacio_ignorado", total=len(tmpls))
 
         if not tmpls:
             return []
