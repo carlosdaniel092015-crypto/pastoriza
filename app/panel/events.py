@@ -106,6 +106,7 @@ async def tocar_chatmeta(
     user_name: str = "",
     telefono: str = "",
     ultimo: str = "",
+    ultimo_de: str = "cliente",  # cliente | bot | asesor
     ad_id: str = "",
     ad_headline: str = "",
     ad_producto: str = "",
@@ -124,7 +125,11 @@ async def tocar_chatmeta(
         "destino": destino or {"to": chat_id},
         "user_name": user_name,
         "telefono": telefono,
+        # `ultimo` es el ÚLTIMO mensaje de la conversación, venga del cliente, del bot
+        # o de un asesor, y `ultimo_de` dice quién lo dijo: la lista de chats mostraba
+        # sólo lo del cliente, así que no se veía qué había contestado el bot.
         "ultimo": ultimo[:200],
+        "ultimo_de": ultimo_de or "cliente",
         "ultimo_ts": time.time(),
         "ad_id": ad_id,
         "ad_headline": ad_headline,

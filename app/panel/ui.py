@@ -99,6 +99,10 @@ PANEL_HTML = r"""<!doctype html>
   .chat .n.num{font-family:var(--mono);font-weight:500;letter-spacing:-.02em}
   .chat .h{font-family:var(--mono);font-size:11px;color:var(--mut)}
   .chat .m{color:var(--mut);font-size:13px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  /* Quién habló último en la conversación: sin esto no se sabía si el bot contestó. */
+  .chat .quien{font-family:var(--mono);font-size:10.5px;text-transform:uppercase;letter-spacing:.04em}
+  .chat .quien.bot{color:var(--senal)}
+  .chat .quien.asesor{color:var(--cinta)}
   .adot{width:7px;height:7px;border-radius:50%;background:var(--senal);flex:none}
   .ttag{font-size:9.5px;color:var(--mut);border:1px solid var(--line);border-radius:3px;padding:0 5px;letter-spacing:.06em}
 
@@ -502,8 +506,14 @@ async function loadStats(){
 // conversaciones
 async function loadChats(){ try{ const d=await api('/chats'); chatsCache=d.chats; renderChats(); loadStats(); }catch(e){} }
 let _chatsSig='';
+// Prefijo de quién habló último en la conversación (el cliente, el bot o un asesor).
+function quienDijo(de){
+  if(de==='bot') return '<span class="quien bot">Bot:</span> ';
+  if(de==='asesor') return '<span class="quien asesor">Asesor:</span> ';
+  return '';
+}
 function renderChats(){
-  const sig=JSON.stringify(chatsCache.map(c=>[c.chat_id,c.ultimo,c.ultimo_ts,c.pausado]))+'|'+selChat;
+  const sig=JSON.stringify(chatsCache.map(c=>[c.chat_id,c.ultimo,c.ultimo_de,c.ultimo_ts,c.pausado]))+'|'+selChat;
   if(sig===_chatsSig) return; _chatsSig=sig;
   $('#chcount').textContent=chatsCache.length;
   const el=$('#chats');
@@ -514,7 +524,7 @@ function renderChats(){
     const tag=esTest(c.chat_id)?'<span class="ttag">PRUEBA</span>':'';
     return `<button class="chat ${c.chat_id===selChat?'sel':''}" onclick="openChat('${c.chat_id}')">
       <div class="top"><span class="n ${esNum(nombre)?'num':''}">${esc(nombre)}</span>${tag}<span class="h">${fmtRel(c.ultimo_ts)}</span>${dot}</div>
-      <div class="m">${esc(c.ultimo)||'—'}</div></button>`;
+      <div class="m">${quienDijo(c.ultimo_de)}${esc(c.ultimo)||'—'}</div></button>`;
   }).join('');
 }
 function abrirVistaHilo(){ const c=document.querySelector('.conv'); if(c)c.classList.add('show-thread'); document.body.classList.add('thread-open'); }

@@ -405,7 +405,10 @@ async def procesar_turno(
         )
         await panel_events.tocar_chatmeta(
             chat_id, emisor=emisor, destino=destino,
-            user_name=ctx.user_name, telefono=ctx.telefono or "", ultimo=texto,
+            user_name=ctx.user_name, telefono=ctx.telefono or "",
+            # Lo último de la conversación es la respuesta del BOT, no lo que escribió
+            # el cliente: así en la lista se ve qué contestó y quién habló al final.
+            ultimo=directa, ultimo_de="bot",
             ad_id=ctx.ad_id, ad_headline=ctx.ad_headline,
             ad_producto=ctx.ad_producto_nombre or ctx.ad_descripcion.replace("\n", " ")[:140],
         )
@@ -437,9 +440,12 @@ async def procesar_turno(
     await tocar_ventana_24h(chat_id)
     await _efectos(ctx, respuesta, mensaje, trigger)
 
+    # Si el bot no llegó a decir nada (p. ej. sólo mandó fotos), queda lo del cliente.
+    ultimo_txt = mensaje or (f"({len(fotos)} foto(s))" if fotos else texto)
     await panel_events.tocar_chatmeta(
         chat_id, emisor=emisor, destino=destino,
-        user_name=ctx.user_name, telefono=ctx.telefono or "", ultimo=texto,
+        user_name=ctx.user_name, telefono=ctx.telefono or "",
+        ultimo=ultimo_txt, ultimo_de="bot" if (mensaje or fotos) else "cliente",
     )
     await panel_events.publicar(
         "turn", chat_id, user_name=ctx.user_name, texto=texto,
