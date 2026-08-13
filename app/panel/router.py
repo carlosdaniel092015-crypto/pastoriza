@@ -22,7 +22,7 @@ from fastapi import (
 )
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Response
 
-from app.media import convertir_a_jpg
+from app.media import convertir_a_jpg, convertir_audio_ogg
 
 from app.business_config import (
     config_as_dict,
@@ -427,6 +427,19 @@ async def api_responder_audio(
     if not data or len(data) > 16 * 1024 * 1024:
         raise HTTPException(status_code=400, detail="audio vacío o muy grande (máx 16 MB).")
     ctype = (file.content_type or "audio/ogg").split(";")[0].strip().lower()
+    # WhatsApp/YCloud NO acepta audio/webm (lo que graba Chrome). Convertimos a
+    # ogg/opus con ffmpeg. Los formatos ya compatibles se mandan tal cual.
+    soportados = {"audio/ogg", "audio/mpeg", "audio/mp4", "audio/aac", "audio/amr"}
+    if ctype not in soportados:
+        try:
+            data = await convertir_audio_ogg(data)
+            ctype = "audio/ogg"
+        except Exception as exc:  # noqa: BLE001
+            log.warning("audio_convertir_fallo", chat_id=chat_id, error=str(exc))
+            raise HTTPException(
+                status_code=400,
+                detail="no se pudo convertir el audio a un formato compatible.",
+            )
     ext = _AUDIO_EXT.get(ctype, "ogg")
     token = _media_guardar(data, ctype)
     url = f"{settings.base_url}/panel/media/{token}.{ext}"

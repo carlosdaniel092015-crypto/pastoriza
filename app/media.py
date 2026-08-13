@@ -117,6 +117,36 @@ async def convertir_a_jpg(data: bytes) -> bytes:
     return await asyncio.to_thread(_a_jpg, data)
 
 
+def _a_ogg(data: bytes) -> bytes:
+    """Convierte audio (ej. webm/opus del navegador) a ogg/opus con ffmpeg.
+
+    WhatsApp/YCloud NO acepta audio/webm; sí ogg/opus. Síncrono (bloqueante).
+    """
+    import os
+    import subprocess
+    import tempfile
+
+    with tempfile.TemporaryDirectory() as d:
+        src = os.path.join(d, "in")
+        dst = os.path.join(d, "out.ogg")
+        with open(src, "wb") as f:
+            f.write(data)
+        r = subprocess.run(
+            ["ffmpeg", "-hide_banner", "-loglevel", "error", "-y",
+             "-i", src, "-c:a", "libopus", "-b:a", "32k", dst],
+            capture_output=True,
+        )
+        if r.returncode != 0 or not os.path.exists(dst) or os.path.getsize(dst) == 0:
+            raise RuntimeError("ffmpeg: " + r.stderr.decode("utf-8", "ignore")[:300])
+        with open(dst, "rb") as f:
+            return f.read()
+
+
+async def convertir_audio_ogg(data: bytes) -> bytes:
+    """Convierte audio a ogg/opus (formato de nota de voz de WhatsApp) en un hilo."""
+    return await asyncio.to_thread(_a_ogg, data)
+
+
 async def transcribir_audio(url: str) -> str:
     data = await descargar(url)
     nombre = "audio.ogg"

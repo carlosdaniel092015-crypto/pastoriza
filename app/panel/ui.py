@@ -322,6 +322,7 @@ PANEL_HTML = r"""<!doctype html>
     <nav class="side" id="side">
       <button class="it active" data-v="conv"><span class="n">01</span>Conversaciones</button>
       <button class="it" data-v="alertas"><span class="n">02</span>Logs<span class="badge" id="badge" style="display:none">0</span></button>
+      <button class="it" data-v="alertas" data-filtro="revisar" style="padding-left:30px"><span class="n">02.1</span>Revisar</button>
       <button class="it" data-v="config"><span class="n">03</span>Config</button>
       <button class="it" data-v="prompt"><span class="n">04</span>Prompt</button>
       <button class="it" data-v="aprendizaje"><span class="n">05</span>Aprendizaje<span class="badge" id="badgeSug" style="display:none">0</span></button>
@@ -455,7 +456,7 @@ document.querySelectorAll('nav.side .it').forEach(b=>b.onclick=()=>{
   document.querySelectorAll('nav.side .it').forEach(x=>x.classList.remove('active')); b.classList.add('active');
   document.querySelectorAll('.view').forEach(v=>v.classList.remove('active')); $('#v-'+b.dataset.v).classList.add('active');
   if(b.dataset.v==='config') loadCfg(); if(b.dataset.v==='prompt') loadPrompt(); if(b.dataset.v==='aprendizaje') loadAprendizaje();
-  if(b.dataset.v==='alertas'){ alertCount=0; renderBadge(); }
+  if(b.dataset.v==='alertas'){ alertCount=0; renderBadge(); if(b.dataset.filtro){ setFiltro(b.dataset.filtro); } }
 });
 
 // reloj header
