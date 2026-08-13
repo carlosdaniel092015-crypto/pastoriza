@@ -23,7 +23,7 @@ from fastapi.responses import JSONResponse, Response
 from app.media import close_http as close_media_http
 from app.media import convertir_a_jpg, descargar
 
-from app import canario
+from app import canario, version
 from app.business_config import (
     config_as_dict,
     listar_anuncios,
@@ -408,7 +408,9 @@ async def serve_img(fname: str) -> Response:
 # ------------------------------------------------------------- health ---
 @app.get("/health")
 async def health() -> dict:
-    return {"status": "ok"}
+    """Incluye el commit desplegado: así se sabe si un cambio llegó a producción o
+    si el deploy se quedó atrás (antes no había forma de distinguirlo)."""
+    return {"status": "ok", **version.info()}
 
 
 @app.get("/health/deep")

@@ -127,7 +127,14 @@ async def panel_static(name: str) -> FileResponse:
 
 @panel_router.get("/api/whoami")
 async def whoami(x_panel_token: str | None = Header(default=None)) -> dict:
-    return {"auth_requerida": bool(settings.panel_token), "ok": True}
+    # `version`: qué commit está corriendo. Si el panel muestra uno viejo, el
+    # problema es el DEPLOY, no el código.
+    from app import version
+
+    return {
+        "auth_requerida": bool(settings.panel_token), "ok": True,
+        "version": version.info(),
+    }
 
 
 # ------------------------------------------------- encendido global ---
