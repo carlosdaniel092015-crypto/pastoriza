@@ -341,6 +341,8 @@ PANEL_HTML = r"""<!doctype html>
             <div class="msgs" id="msgs"><div class="empty">Selecciona un chat de la izquierda.</div></div>
             <div class="replyrow" id="replyrow">
               <input id="rin" placeholder="Escribe como asesor (pausa el bot 30 min)…" onkeydown="if(event.key==='Enter')responder()"/>
+              <label class="btn sec" style="cursor:pointer" title="Adjuntar imagen">📎<input type="file" accept="image/*" style="display:none" onchange="responderImagen(event)"/></label>
+              <label class="btn sec" style="cursor:pointer" title="Tomar foto con la cámara">📷<input type="file" accept="image/*" capture="environment" style="display:none" onchange="responderImagen(event)"/></label>
               <button class="btn" onclick="responder()">Enviar</button>
             </div>
             <div class="tfoot eyebrow" id="tfoot">El bot responde solo · escribe desde WhatsApp Web si hace falta</div>
@@ -537,6 +539,13 @@ async function marcarRevision(id){ await api('/chats/'+encodeURIComponent(id)+'/
 function toggleReply(){ const i=$('#rin'); if(i)i.focus(); }
 async function responder(){ if(!selChat)return; const t=$('#rin').value.trim(); if(!t)return; $('#rin').value='';
   const d=await api('/chats/'+encodeURIComponent(selChat)+'/responder',{method:'POST',body:JSON.stringify({texto:t})}); openChat(selChat); }
+async function responderImagen(ev){ const f=ev.target.files&&ev.target.files[0]; ev.target.value=''; if(!selChat||!f)return;
+  if(f.size>12*1024*1024){ alert('La imagen es muy grande (máx 12 MB).'); return; }
+  const cap=($('#rin').value||'').trim(); const fd=new FormData(); fd.append('file',f); fd.append('caption',cap);
+  try{ const r=await fetch('/panel/api/chats/'+encodeURIComponent(selChat)+'/responder-imagen',{method:'POST',headers:TOKEN?{'X-Panel-Token':TOKEN}:{},body:fd});
+    if(!r.ok){ const e=await r.json().catch(()=>({})); alert('No se pudo enviar la imagen: '+(e.detail||r.status)); return; }
+    $('#rin').value=''; openChat(selChat);
+  }catch(e){ alert('Error enviando la imagen: '+e); } }
 async function eliminarChat(id){
   if(!confirm('¿Eliminar esta conversación? Se borra el historial del chat y no se puede deshacer.'))return;
   try{ await api('/chats/'+encodeURIComponent(id),{method:'DELETE'}); }catch(e){ alert('No se pudo eliminar.'); return; }

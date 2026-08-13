@@ -6,12 +6,23 @@ se permite todo (solo para desarrollo local).
 from __future__ import annotations
 
 import hmac
+import secrets
 import time
 from pathlib import Path
 from typing import Any
 
-from fastapi import APIRouter, Header, HTTPException, Request
+from fastapi import (
+    APIRouter,
+    File,
+    Form,
+    Header,
+    HTTPException,
+    Request,
+    UploadFile,
+)
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Response
+
+from app.media import convertir_a_jpg
 
 from app.business_config import (
     config_as_dict,
@@ -307,6 +318,84 @@ async def api_responder(
         "manual", chat_id, detalle=texto[:200], enviado=enviado, user_name=meta.get("user_name", "")
     )
     return {"ok": True, "enviado": enviado, "pausado": True}
+
+
+# ------------------------------------------------ respuesta con imagen ---
+# Cache transitorio en memoria: el supervisor sube una imagen desde el panel y
+# YCloud la fetchea de /panel/media/{token} para reenviarla al cliente. 1 worker
+# (ver Dockerfile), así que un dict por proceso alcanza; se acota para no crecer.
+_MEDIA_CACHE: dict[str, bytes] = {}
+_MEDIA_MAX = 50
+
+
+def _media_guardar(jpg: bytes) -> str:
+    token = secrets.token_urlsafe(16)
+    _MEDIA_CACHE[token] = jpg
+    while len(_MEDIA_CACHE) > _MEDIA_MAX:
+        _MEDIA_CACHE.pop(next(iter(_MEDIA_CACHE)))
+    return token
+
+
+@panel_router.get("/media/{token}")
+async def serve_media(token: str) -> Response:
+    """Sirve una imagen subida por el supervisor. PÚBLICA (sin token): YCloud la
+    fetchea sin auth, igual que /img. Transitoria (en memoria)."""
+    jpg = _MEDIA_CACHE.get(str(token).split(".")[0])
+    if jpg is None:
+        raise HTTPException(status_code=404, detail="media no encontrada")
+    return Response(
+        content=jpg,
+        media_type="image/jpeg",
+        headers={"Cache-Control": "public, max-age=3600"},
+    )
+
+
+@panel_router.post("/api/chats/{chat_id}/responder-imagen")
+async def api_responder_imagen(
+    chat_id: str,
+    file: UploadFile = File(...),
+    caption: str = Form(""),
+    x_panel_token: str | None = Header(default=None),
+) -> dict:
+    """Respuesta manual con IMAGEN (adjunto o cámara). Igual que /responder:
+    pausa el bot 30 min, manda por YCloud y guarda en el historial."""
+    _auth(x_panel_token)
+    if not settings.base_url:
+        raise HTTPException(
+            status_code=400,
+            detail="PUBLIC_BASE_URL no configurado: YCloud no podría buscar la imagen.",
+        )
+    data = await file.read()
+    if len(data) > 12 * 1024 * 1024:
+        raise HTTPException(status_code=400, detail="la imagen es muy grande (máx 12 MB).")
+    # Pillow valida y convierte a la vez: si no es imagen, convertir_a_jpg falla.
+    try:
+        jpg = await convertir_a_jpg(data)
+    except Exception as exc:  # noqa: BLE001
+        log.warning("panel_imagen_convertir_fallo", chat_id=chat_id, error=str(exc))
+        raise HTTPException(status_code=400, detail="el archivo no es una imagen válida.")
+
+    token = _media_guardar(jpg)
+    url = f"{settings.base_url}/panel/media/{token}.jpg"
+    cap = (caption or "").strip()
+
+    meta = await events.leer_chatmeta(chat_id)
+    emisor = meta.get("emisor") or settings.ycloud_from
+    destino = meta.get("destino") or {"to": chat_id}
+
+    enviado = await ycloud.enviar_imagen(destino, emisor, url, cap[:1024])
+
+    # Pausa el bot 30 min y registra en historial + feed (igual que el texto).
+    await pausar_bot(chat_id)
+    etiqueta = "[SUPERVISOR] (imagen)" + (f" {cap}" if cap else "")
+    await RedisSession(chat_id).add_items(
+        [{"role": "assistant", "content": etiqueta}]
+    )
+    await events.publicar(
+        "manual", chat_id, detalle=etiqueta[:200], enviado=bool(enviado),
+        user_name=meta.get("user_name", ""),
+    )
+    return {"ok": True, "enviado": bool(enviado), "pausado": True}
 
 
 # --------------------------------------------------------- config bot ---
