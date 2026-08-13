@@ -91,37 +91,23 @@ class YCloud:
         if not texto:
             return []
 
-        es_lista = len(_RE_LISTA.findall(texto)) >= 3
-        if es_lista or len(texto) > 1000:
-            MAXM = 3500
-            out: list[str] = []
-            buf = ""
-            for ln in texto.split("\n"):
-                if buf and len(buf) + 1 + len(ln) > MAXM:
-                    out.append(buf)
-                    buf = ln
-                else:
-                    buf = f"{buf}\n{ln}" if buf else ln
-            if buf:
-                out.append(buf)
-            return out
+        # UN turno = UN mensaje de WhatsApp. Antes se partía por párrafos (MAX 350),
+        # así que una sola respuesta llegaba como 3-4 mensajes seguidos y el cliente
+        # veía un chorro de burbujas. Sólo se parte si excede el límite del canal.
+        MAXM = 3500
+        if len(texto) <= MAXM:
+            return [texto]
 
-        MAX = 350
-        out = []
-        for parrafo in [p.strip() for p in re.split(r"\n{2,}", texto) if p.strip()]:
-            if len(parrafo) <= MAX:
-                out.append(parrafo)
-                continue
-            buf = ""
-            for sent in re.split(r"(?<=[.!?])\s+", parrafo):
-                if len(buf) + 1 + len(sent) > MAX:
-                    if buf:
-                        out.append(buf.strip())
-                    buf = sent
-                else:
-                    buf = f"{buf} {sent}" if buf else sent
-            if buf:
-                out.append(buf.strip())
+        out: list[str] = []
+        buf = ""
+        for ln in texto.split("\n"):
+            if buf and len(buf) + 1 + len(ln) > MAXM:
+                out.append(buf)
+                buf = ln
+            else:
+                buf = f"{buf}\n{ln}" if buf else ln
+        if buf:
+            out.append(buf)
         return out
 
     async def enviar_texto(

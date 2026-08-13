@@ -40,6 +40,28 @@ def precio_blindado(precio_unitario: float, precio_catalogo: float) -> tuple[flo
     return precio_unitario, False
 
 
+# Un nombre de cliente real: letras (con tildes/ñ), espacios y . ' -. Nada de
+# emojis ni adornos. Sirve para no meter el alias de WhatsApp en Odoo.
+RE_NOMBRE_PERSONA = re.compile(r"^[A-Za-zÁÉÍÓÚÜÑáéíóúüñ][A-Za-zÁÉÍÓÚÜÑáéíóúüñ .'\-]{1,49}$")
+
+
+def nombre_no_valido(nombre: str, nombre_whatsapp: str = "") -> str:
+    """Devuelve el motivo si el nombre NO sirve para un contacto de Odoo, o ''.
+
+    Caso real: el bot creó el contacto y el pedido con el alias de WhatsApp
+    ("la patrona RD Hija Rey 🎉") sin preguntarle el nombre al cliente. Es pura
+    para poder testearla sin Odoo.
+    """
+    n = (nombre or "").strip()
+    if not n:
+        return "falta el nombre del cliente"
+    if nombre_whatsapp and n.casefold() == (nombre_whatsapp or "").strip().casefold():
+        return "ese es el nombre de WhatsApp, no el que dio el cliente"
+    if not RE_NOMBRE_PERSONA.match(n):
+        return "el nombre trae emojis o símbolos: no parece un nombre real"
+    return ""
+
+
 def datos_envio_faltantes(
     provincia: str, municipio: str, sector: str, calle: str
 ) -> list[str]:
@@ -137,8 +159,20 @@ async def crear_contacto(
         email: Correo, si lo dio.
     """
     c = ctx.context
-    if not nombre.strip():
-        return "ERROR: falta el nombre del cliente."
+    # CANDADO: el contacto queda en Odoo para siempre; no se crea con el alias de
+    # WhatsApp ni con emojis. Si no se lo preguntaste al cliente, pregúntaselo.
+    motivo = nombre_no_valido(nombre, c.user_name)
+    if motivo:
+        log.warning(
+            "contacto_nombre_rechazado",
+            chat_id=c.chat_id, nombre=nombre[:40], motivo=motivo,
+        )
+        c.marcar_revision("nombre_invalido")
+        return (
+            f"ERROR: {motivo}. PREGÚNTALE al cliente su nombre completo (ej: "
+            '"¿A nombre de quién registro el pedido?") y vuelve a intentarlo con '
+            "lo que te responda. NO uses el nombre de WhatsApp."
+        )
     valores = {
         "name": nombre.strip(),
         "street": calle.strip(),

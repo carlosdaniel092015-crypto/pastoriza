@@ -98,6 +98,51 @@ class RedisSession:
         # Escritura NO idempotente: un solo intento para no duplicar el historial.
         await run_write(_op)
 
+    async def items_con_indice(self) -> list[dict[str, Any]]:
+        """Items CRUDOS con su índice real en Redis (`_idx`), para poder editarlos.
+
+        `get_items` devuelve la lista SANEADA (sin tool-calls huérfanos), así que sus
+        posiciones no coinciden con las de Redis: editar por esa posición tocaría el
+        mensaje equivocado. El panel usa ésta.
+        """
+        raw = await with_reconnect(lambda r: r.lrange(self._key, 0, -1))
+        out: list[dict[str, Any]] = []
+        for i, item in enumerate(raw):
+            try:
+                obj = json.loads(item)
+            except json.JSONDecodeError:
+                continue
+            if isinstance(obj, dict):
+                obj["_idx"] = i
+                out.append(obj)
+        return out
+
+    async def editar_item(self, indice: int, contenido: str) -> bool:
+        """Reescribe el contenido del mensaje `indice`. True si se pudo."""
+        raw = await with_reconnect(lambda r: r.lindex(self._key, indice))
+        if not raw:
+            return False
+        try:
+            obj = json.loads(raw)
+        except json.JSONDecodeError:
+            return False
+        obj["content"] = contenido
+        obj["editado"] = True
+        payload = json.dumps(obj, ensure_ascii=False, default=str)
+        await with_reconnect(lambda r: r.lset(self._key, indice, payload))
+        return True
+
+    async def borrar_item(self, indice: int) -> bool:
+        """Borra el mensaje `indice`. Redis no borra por posición: se marca con un
+        centinela y se elimina por valor (patrón estándar LSET + LREM)."""
+        centinela = "__BORRADO_PANEL__"
+        try:
+            await with_reconnect(lambda r: r.lset(self._key, indice, centinela))
+        except Exception:  # noqa: BLE001  (índice fuera de rango)
+            return False
+        await with_reconnect(lambda r: r.lrem(self._key, 1, centinela))
+        return True
+
     async def pop_item(self) -> dict[str, Any] | None:
         raw = await run_write(lambda r: r.rpop(self._key))
         if not raw:

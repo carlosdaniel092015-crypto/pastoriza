@@ -61,6 +61,13 @@ class TestSenalesHumano:
                   "ok", "gracias", "quiero 200 botellas"):
             assert senales_humano(t) is False, t
 
+    def test_el_cliente_avisando_NO_es_pedir_un_asesor(self):
+        """Casos reales que el bot escalaba: el cliente INFORMA algo, no pide ayuda."""
+        for t in ("Hablé con alguien que se va a poner en contacto con ustedes",
+                  "Penélope llamará", "mi esposo pasa mañana a buscarlo",
+                  "ya le dije a mi socio", "tienen delivery a villa mella?"):
+            assert senales_humano(t) is False, t
+
 
 class TestVeredicto:
     def test_saludo_no_habilita_escalada(self):

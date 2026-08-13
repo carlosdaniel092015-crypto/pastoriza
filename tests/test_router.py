@@ -92,3 +92,25 @@ class TestVaAlAgente:
 
     def test_vacio(self):
         assert r("   ") is None
+
+
+class TestMultiIntencion:
+    """Caso real: '¿Precio botellas? / Donde están ubicado' -> el fast-path devolvía
+    SOLO la dirección y la pregunta del precio se perdía en silencio."""
+
+    def test_faq_mas_producto_va_al_agente(self):
+        assert r("¿Precio botellas?\nDonde están ubicado") is None
+
+    def test_dos_faq_van_al_agente(self):
+        assert r("cuanto cuesta el envio y donde estan ubicados") is None
+
+    def test_una_sola_faq_sigue_en_fast_path(self):
+        assert r("donde estan ubicados")
+        assert r("cuanto cuesta el envio")
+        assert r("a que hora abren")
+
+    def test_estado_de_pedido_no_se_confunde_con_direccion(self):
+        # "donde esta mi pedido" también matchea la regex de dirección: debe
+        # seguir respondiendo el estado del pedido, no irse al agente.
+        out = r("donde esta mi pedido")
+        assert out and "829" in out

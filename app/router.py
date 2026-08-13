@@ -97,6 +97,43 @@ def normalizar(texto: str) -> str:
     return quitar_tildes(str(texto or "")).strip().lower()
 
 
+# Sustantivos de producto: si aparecen, la pregunta necesita el CATÁLOGO y no la
+# puede contestar una respuesta enlatada. Ojo: "precio"/"costo" NO van acá, porque
+# "cuanto cuesta el envio" sí lo resuelve el fast-path sin gastar tokens.
+RE_PRODUCTO = _R(
+    r"\b(botella|botellas|botellon|botellones|galon|galones|tarro|tarros|frasco|"
+    r"frascos|pote|potes|pomo|pomos|envase|envases|tapa|tapas|atomizador|jarra|"
+    r"vaso|vasos|onza|onzas|oz|catalogo|producto|productos)\b"
+)
+
+# Grupos de FAQ: una misma respuesta cubre varias preguntas (la de dirección ya trae
+# horario y teléfono), así que se cuentan por GRUPO y no por regex.
+def _grupos_faq(norm: str) -> set[str]:
+    g: set[str] = set()
+    # Exclusiva: "donde esta mi pedido" es estado del pedido, NO la dirección de la
+    # tienda (aunque "donde esta" también matchee la regex de dirección).
+    if RE_ESTADO_PEDIDO.search(norm):
+        return {"estado"}
+    if RE_DIRECCION.search(norm) or RE_HORARIO.search(norm) or RE_TELEFONO.search(norm):
+        g.add("tienda")
+    if RE_ENVIO_RETIRO.match(norm) or RE_ENVIO.search(norm):
+        g.add("envio")
+    if RE_CUENTAS.search(norm):
+        g.add("pago")
+    return g
+
+
+def _multi_intencion(norm: str) -> bool:
+    """True si el mensaje trae más de una cosa que responder."""
+    grupos = _grupos_faq(norm)
+    if not grupos:
+        return False
+    if len(grupos) > 1:
+        return True
+    # Una FAQ + una pregunta de producto ("precio botellas") -> hace falta el catálogo.
+    return bool(RE_PRODUCTO.search(norm))
+
+
 def respuesta_directa(
     texto: str,
     cfg: BusinessConfig,
@@ -125,6 +162,15 @@ def respuesta_directa(
     if RE_ENVIO_UBIC_A.search(norm) and RE_ENVIO_UBIC_B.search(norm):
         return None
     if RE_YA_PAGO.search(norm) or RE_UBIC_WA.search(norm):
+        return None
+
+    # MULTI-INTENCIÓN: el fast-path devuelve UNA sola respuesta enlatada, así que si
+    # el cliente preguntó DOS cosas en la misma ráfaga sólo contestaba la primera que
+    # matcheara y la otra se perdía en silencio (caso real: "¿Precio botellas? / Donde
+    # están ubicado" -> respondió sólo la dirección). Si hay más de una intención, o
+    # una FAQ + una pregunta de producto (que exige el catálogo), lo atiende el agente,
+    # que tiene TODOS estos datos en su prompt y responde las dos cosas en UN mensaje.
+    if _multi_intencion(norm):
         return None
 
     if RE_ESTADO_PEDIDO.search(norm):
