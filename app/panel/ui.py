@@ -321,7 +321,7 @@ PANEL_HTML = r"""<!doctype html>
   <div class="body">
     <nav class="side" id="side">
       <button class="it active" data-v="conv"><span class="n">01</span>Conversaciones</button>
-      <button class="it" data-v="alertas"><span class="n">02</span>Alertas<span class="badge" id="badge" style="display:none">0</span></button>
+      <button class="it" data-v="alertas"><span class="n">02</span>Logs<span class="badge" id="badge" style="display:none">0</span></button>
       <button class="it" data-v="config"><span class="n">03</span>Config</button>
       <button class="it" data-v="prompt"><span class="n">04</span>Prompt</button>
       <button class="it" data-v="aprendizaje"><span class="n">05</span>Aprendizaje<span class="badge" id="badgeSug" style="display:none">0</span></button>
@@ -343,6 +343,7 @@ PANEL_HTML = r"""<!doctype html>
               <input id="rin" placeholder="Escribe como asesor (pausa el bot 30 min)…" onkeydown="if(event.key==='Enter')responder()"/>
               <label class="btn sec" style="cursor:pointer" title="Adjuntar imagen">📎<input type="file" accept="image/*" style="display:none" onchange="responderImagen(event)"/></label>
               <label class="btn sec" style="cursor:pointer" title="Tomar foto con la cámara">📷<input type="file" accept="image/*" capture="environment" style="display:none" onchange="responderImagen(event)"/></label>
+              <button class="btn sec" id="micbtn" style="cursor:pointer" title="Grabar nota de voz" onclick="toggleGrabacion()">🎤</button>
               <button class="btn" onclick="responder()">Enviar</button>
             </div>
             <div class="tfoot eyebrow" id="tfoot">El bot responde solo · escribe desde WhatsApp Web si hace falta</div>
@@ -353,8 +354,8 @@ PANEL_HTML = r"""<!doctype html>
       <!-- Alertas -->
       <section class="view" id="v-alertas">
         <div class="pane">
-          <h2>Alertas</h2>
-          <div class="sub">Todo lo que pasa, en vivo: respuestas, cambios, avisos y errores.</div>
+          <h2>Logs</h2>
+          <div class="sub">Todo lo que pasa, en vivo: respuestas, cambios, avisos y errores. La pestaña <b>Revisar</b> filtra lo que necesita atención.</div>
           <div class="atabs" id="filtros"></div>
           <div id="feed"><div class="empty">—</div></div>
         </div>
@@ -390,8 +391,9 @@ PANEL_HTML = r"""<!doctype html>
               <div class="editor"><div class="gutter" id="pgut">1</div><textarea id="pov" oninput="syncGutter()" onscroll="syncGutter()"></textarea></div>
             </div>
             <div>
-              <div class="eyebrow" style="margin-bottom:6px">Prompt base · solo lectura</div>
-              <div class="editor"><div class="gutter" id="pgutb">1</div><textarea id="pbase" class="ro" readonly onscroll="syncGutterBase()"></textarea></div>
+              <div class="eyebrow" style="margin-bottom:6px">Prompt base · editable (se guarda como override)</div>
+              <div class="editor"><div class="gutter" id="pgutb">1</div><textarea id="pbase" oninput="syncGutterBase()" onscroll="syncGutterBase()"></textarea></div>
+              <button class="btn sec" style="margin-top:6px" onclick="guardarBaseComoOverride()">Guardar como override</button>
             </div>
           </div>
         </div>
@@ -546,6 +548,24 @@ async function responderImagen(ev){ const f=ev.target.files&&ev.target.files[0];
     if(!r.ok){ const e=await r.json().catch(()=>({})); alert('No se pudo enviar la imagen: '+(e.detail||r.status)); return; }
     $('#rin').value=''; openChat(selChat);
   }catch(e){ alert('Error enviando la imagen: '+e); } }
+let mediaRec=null, chunksAudio=[];
+async function toggleGrabacion(){
+  if(!selChat)return;
+  if(mediaRec&&mediaRec.state==='recording'){ mediaRec.stop(); return; }
+  if(!navigator.mediaDevices||!window.MediaRecorder){ alert('Tu navegador no permite grabar audio.'); return; }
+  let stream; try{ stream=await navigator.mediaDevices.getUserMedia({audio:true}); }
+  catch(e){ alert('No se pudo acceder al micrófono. Revisá los permisos del sitio.'); return; }
+  const mime=MediaRecorder.isTypeSupported('audio/ogg;codecs=opus')?'audio/ogg;codecs=opus':(MediaRecorder.isTypeSupported('audio/webm;codecs=opus')?'audio/webm;codecs=opus':'');
+  chunksAudio=[]; mediaRec=mime?new MediaRecorder(stream,{mimeType:mime}):new MediaRecorder(stream);
+  mediaRec.ondataavailable=ev=>{ if(ev.data&&ev.data.size)chunksAudio.push(ev.data); };
+  mediaRec.onstop=async()=>{ stream.getTracks().forEach(t=>t.stop()); $('#micbtn').textContent='🎤';
+    const mt=mediaRec.mimeType||'audio/ogg'; const blob=new Blob(chunksAudio,{type:mt}); if(!blob.size)return;
+    const fd=new FormData(); fd.append('file',blob,'nota.'+(mt.indexOf('webm')>=0?'webm':'ogg'));
+    try{ const r=await fetch('/panel/api/chats/'+encodeURIComponent(selChat)+'/responder-audio',{method:'POST',headers:TOKEN?{'X-Panel-Token':TOKEN}:{},body:fd});
+      if(!r.ok){ const e=await r.json().catch(()=>({})); alert('No se pudo enviar la nota de voz: '+(e.detail||r.status)); return; }
+      openChat(selChat);
+    }catch(e){ alert('Error enviando la nota de voz: '+e); } };
+  mediaRec.start(); $('#micbtn').textContent='⏹️'; }
 async function eliminarChat(id){
   if(!confirm('¿Eliminar esta conversación? Se borra el historial del chat y no se puede deshacer.'))return;
   try{ await api('/chats/'+encodeURIComponent(id),{method:'DELETE'}); }catch(e){ alert('No se pudo eliminar.'); return; }
@@ -637,6 +657,7 @@ function syncGutter(){ gut($('#pgut'),$('#pov')); }
 function syncGutterBase(){ gut($('#pgutb'),$('#pbase')); }
 async function savePrompt(){ const a=$('#pagente').value; try{ const d=await api('/prompts/'+a,{method:'POST',body:JSON.stringify({override:$('#pov').value})}); $('#pmsg').innerHTML='<span class="ok">Guardado ✓ ('+(d.usando_override?'override':'base')+')</span>'; await loadPrompt(); }catch(e){ $('#pmsg').innerHTML='<span class="bad">Error (¿mínimo 40 caracteres?)</span>'; } setTimeout(()=>$('#pmsg').textContent='',3500); }
 async function resetPrompt(){ if(!confirm('¿Volver al .md base de este agente?'))return; $('#pov').value=''; await savePrompt(); }
+async function guardarBaseComoOverride(){ const t=$('#pbase').value; if(t.trim().length<40){ $('#pmsg').innerHTML='<span class="bad">Mínimo 40 caracteres</span>'; return; } $('#pov').value=t; syncGutter(); await savePrompt(); }
 function subirMd(ev){ const f=ev.target.files[0]; if(!f)return; const rd=new FileReader(); rd.onload=()=>{ $('#pov').value=rd.result; syncGutter(); $('#pmsg').innerHTML='<span class="meta">Archivo cargado; dale Guardar.</span>'; }; rd.readAsText(f); ev.target.value=''; }
 
 // aprendizaje
@@ -650,7 +671,8 @@ async function loadAprendizaje(){ const d=await api('/aprendizaje'); const sugs=
   $('#sugs').innerHTML=sugs.length?sugs.map(s=>{const st=s.estado==='pendiente'?'':(s.estado==='aprobada'?'<span class="ok">✓ aprobada</span>':'<span class="bad">✕ descartada</span>');
     const chip=`<span class="rchip ${s.riesgo==='alto'?'alto':'bajo'}">Riesgo ${s.riesgo}</span>`;
     const btns=s.estado==='pendiente'?`<div style="margin-top:8px"><button class="btn sm" onclick="aprobarSug(${s.id})">Aprobar</button> <button class="btn sec sm" onclick="rechazarSug(${s.id})">Descartar</button></div>`:'';
-    return `<div class="group">${chip} <span class="meta">${esc(s.origen||'')}</span> ${st}<div style="margin:6px 0;font-weight:600">${esc(s.contenido)}</div>${btns}</div>`;}).join(''):'<div class="empty">Nada que revisar. El bot responde según lo esperado.</div>';
+    const oc=s.origen_chats||[]; const src=oc.length?`<div class="meta" style="margin-top:4px">De: `+oc.slice(0,6).map(id=>`<a href="#" onclick="verConv('${esc(String(id))}');return false" style="color:var(--senal)">${esc(String(id))}</a>`).join(', ')+`</div>`:'';
+    return `<div class="group">${chip} <span class="meta">${esc(s.origen||'')}</span> ${st}<div style="margin:6px 0;font-weight:600">${esc(s.contenido)}</div>${src}${btns}</div>`;}).join(''):'<div class="empty">Nada que revisar. El bot responde según lo esperado.</div>';
   const dup=detectarDup(reglas);
   let rhtml=dup?`<div class="dupwarn"><span>2 reglas muy parecidas · las número ${dup.i+1} y ${dup.j+1} dicen lo mismo</span><button class="btn sec sm" onclick="combinar(${reglas[dup.j].id})">Combinar</button></div>`:'';
   rhtml+=reglas.length?reglas.map((r,i)=>{const isdup=dup&&(i===dup.i||i===dup.j);
@@ -715,7 +737,7 @@ function notifTexto(e){ const name=e.user_name||e.chat_id||'un cliente';
     default: return null; } }
 function notificarEvento(e){ const info=notifTexto(e); if(!info)return;
   const viendo = document.visibilityState==='visible' && e.chat_id===selChat && $('#v-conv').classList.contains('active');
-  if(viendo) return;
+  if(viendo){ if(['turn','manual','handoff','order'].includes(e.kind)) openChat(selChat); return; }
   showToast(e.kind, info.t, info.b, e.chat_id);
   if(!notifOn || !('Notification' in window) || Notification.permission!=='granted') return;
   const opt={ body:info.b, icon:'/panel/static/icon-192.png', badge:'/panel/static/icon-192.png',

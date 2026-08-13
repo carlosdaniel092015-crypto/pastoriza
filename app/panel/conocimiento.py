@@ -166,15 +166,23 @@ async def del_correccion(cid: int) -> None:
 
 # --------------------------------------------------------- sugerencias ---
 async def add_sugerencia(
-    tipo: str, contenido: str, riesgo: str = "bajo", origen: str = "analisis"
+    tipo: str,
+    contenido: str,
+    riesgo: str = "bajo",
+    origen: str = "analisis",
+    origen_chats: list[str] | None = None,
 ) -> dict:
-    """tipo: 'regla' | 'correccion' | 'prompt'. riesgo: 'bajo' | 'alto'."""
+    """tipo: 'regla' | 'correccion' | 'prompt'. riesgo: 'bajo' | 'alto'.
+
+    origen_chats: chat_ids de las conversaciones que motivaron la sugerencia (para
+    que el supervisor pueda abrir el hilo desde el panel)."""
     obj = {
         "id": await _next_id(),
         "tipo": tipo,
         "contenido": contenido.strip(),
         "riesgo": riesgo,
         "origen": origen,
+        "origen_chats": list(origen_chats or []),
         "estado": "pendiente",
         "ts": time.time(),
     }

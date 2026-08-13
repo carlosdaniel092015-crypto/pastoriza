@@ -41,11 +41,15 @@ async def analizar_y_sugerir(auto_aplicar_bajo_riesgo: bool = False) -> dict:
 
     motivos = Counter()
     ejemplos: list[str] = []
+    chats: list[str] = []
     for item in revision:
         for m in item.get("motivos", []):
             motivos[m] += 1
         if item.get("resumen"):
             ejemplos.append(str(item["resumen"])[:160])
+        cid = item.get("chat_id")
+        if cid and str(cid) not in chats:
+            chats.append(str(cid))
 
     resumen = "Motivos más frecuentes:\n" + "\n".join(
         f"- {m}: {n}" for m, n in motivos.most_common(10)
@@ -81,11 +85,11 @@ async def analizar_y_sugerir(auto_aplicar_bajo_riesgo: bool = False) -> dict:
         riesgo = "alto" if str(p.get("riesgo", "")).lower().startswith("alt") else "bajo"
         if riesgo == "bajo" and auto_aplicar_bajo_riesgo:
             await conocimiento.add_regla(texto, origen="analisis-auto")
-            s = await conocimiento.add_sugerencia("regla", texto, riesgo, "analisis")
+            s = await conocimiento.add_sugerencia("regla", texto, riesgo, "analisis", chats[:8])
             await conocimiento._set_estado_sugerencia(s["id"], "aprobada")
             auto += 1
         else:
-            s = await conocimiento.add_sugerencia("regla", texto, riesgo, "analisis")
+            s = await conocimiento.add_sugerencia("regla", texto, riesgo, "analisis", chats[:8])
             pendientes.append(s)
         creadas += 1
 
