@@ -302,12 +302,15 @@ async def api_responder(
     emisor = meta.get("emisor") or settings.ycloud_from
     destino = meta.get("destino") or {"to": chat_id}
 
-    enviado = True
+    # enviar_texto devuelve bool: _post no lanza (traga 4xx/timeouts), así que sin
+    # mirar el retorno el panel decía "enviado" incluso cuando YCloud lo rechazaba.
+    enviado = False
     try:
-        await ycloud.enviar_texto(destino, emisor, texto, simular_tipeo=False)
+        enviado = await ycloud.enviar_texto(destino, emisor, texto, simular_tipeo=False)
     except Exception as exc:  # noqa: BLE001
-        enviado = False
         log.warning("panel_responder_envio_fallo", chat_id=chat_id, error=str(exc))
+    if not enviado:
+        log.warning("panel_responder_no_enviado", chat_id=chat_id)
 
     # Pausa el bot 30 min y registra en historial + feed.
     await pausar_bot(chat_id)

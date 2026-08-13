@@ -25,6 +25,39 @@ class OdooError(RuntimeError):
     pass
 
 
+class _TransportTimeout(xmlrpc.client.Transport):
+    """Transporte HTTP con timeout de socket.
+
+    Sin esto, ServerProxy usa el timeout global de socket (None = infinito): si Odoo
+    acepta la conexión pero no responde, el hilo de `asyncio.to_thread` queda colgado
+    PARA SIEMPRE aunque el `wait_for` de arriba ya haya retornado. Turno tras turno se
+    filtran hilos hasta agotar el pool y toda la integración con Odoo deja de andar
+    (hay que reiniciar el proceso).
+    """
+
+    def __init__(self, timeout: float, *args: Any, **kwargs: Any) -> None:
+        super().__init__(*args, **kwargs)
+        self._timeout = timeout
+
+    def make_connection(self, host):  # type: ignore[no-untyped-def]
+        conn = super().make_connection(host)
+        conn.timeout = self._timeout
+        return conn
+
+
+class _SafeTransportTimeout(xmlrpc.client.SafeTransport):
+    """Igual que _TransportTimeout pero para https (el caso de este cliente)."""
+
+    def __init__(self, timeout: float, *args: Any, **kwargs: Any) -> None:
+        super().__init__(*args, **kwargs)
+        self._timeout = timeout
+
+    def make_connection(self, host):  # type: ignore[no-untyped-def]
+        conn = super().make_connection(host)
+        conn.timeout = self._timeout
+        return conn
+
+
 class OdooClient:
     def __init__(self) -> None:
         self._uid: int | None = None
@@ -35,7 +68,14 @@ class OdooClient:
 
     # ---------------------------------------------------------- internos ---
     def _proxy(self, url: str) -> xmlrpc.client.ServerProxy:
-        return xmlrpc.client.ServerProxy(url, allow_none=True)
+        # Timeout explícito de socket: si Odoo no responde, el hilo muere en vez de
+        # filtrarse (ver _TransportTimeout).
+        t = float(settings.odoo_timeout)
+        transport = (
+            _SafeTransportTimeout(t) if url.lower().startswith("https")
+            else _TransportTimeout(t)
+        )
+        return xmlrpc.client.ServerProxy(url, allow_none=True, transport=transport)
 
     def _authenticate(self) -> int:
         with self._lock:

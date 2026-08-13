@@ -541,7 +541,8 @@ async function toggleBot(id,p){ await api('/chats/'+encodeURIComponent(id)+(p?'/
 async function marcarRevision(id){ await api('/chats/'+encodeURIComponent(id)+'/revisar',{method:'POST'}); alert('Marcado para revisión.'); loadStats(); }
 function toggleReply(){ const i=$('#rin'); if(i)i.focus(); }
 async function responder(){ if(!selChat)return; const t=$('#rin').value.trim(); if(!t)return; $('#rin').value='';
-  const d=await api('/chats/'+encodeURIComponent(selChat)+'/responder',{method:'POST',body:JSON.stringify({texto:t})}); openChat(selChat); }
+  const d=await api('/chats/'+encodeURIComponent(selChat)+'/responder',{method:'POST',body:JSON.stringify({texto:t})}); openChat(selChat);
+  if(d&&d.enviado===false){ alert('OJO: WhatsApp no acepto el mensaje (quedo en el historial pero el cliente NO lo recibio). Revisa la ventana de 24h o el numero emisor.'); } }
 async function responderImagen(ev){ const f=ev.target.files&&ev.target.files[0]; ev.target.value=''; if(!selChat||!f)return;
   if(f.size>12*1024*1024){ alert('La imagen es muy grande (máx 12 MB).'); return; }
   const cap=($('#rin').value||'').trim(); const fd=new FormData(); fd.append('file',f); fd.append('caption',cap);

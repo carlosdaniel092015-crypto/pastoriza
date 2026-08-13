@@ -11,6 +11,7 @@ from app.business_config import BusinessConfig
 from app.catalogo import Producto
 from app.context import ConversationContext
 from app.pipeline import _resolver_fotos, _sanear
+from app.settings import settings
 from app.ycloud import YCloud
 
 
@@ -89,7 +90,9 @@ class TestNoInventarFotos:
             for i in range(20)
         ]
         c.ofrecer(productos)
-        assert len(_resolver_fotos(list(range(20)), c)) == 5
+        # El tope lo fija la config (max_imagenes_por_mensaje), no un número fijo:
+        # el test tenía 5 hardcodeado y quedó viejo cuando el tope subió a 10.
+        assert len(_resolver_fotos(list(range(20)), c)) == settings.max_imagenes_por_mensaje
 
     def test_lista_vacia(self):
         assert _resolver_fotos([], ctx_nuevo()) == []

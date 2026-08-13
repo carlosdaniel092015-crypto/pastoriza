@@ -19,6 +19,8 @@ from app.settings import settings
 log = get_logger(__name__)
 
 EXCLUIR_NOMBRES = {"BIENES", "SERVICIO"}
+# Cooldown del aviso al admin por catálogo degradado (la caché recarga seguido).
+_COOLDOWN_AVISO = 1800.0  # 30 min
 IMG_BASE = f"{settings.odoo_url.rstrip('/')}/web/image/product.template"
 SHOP_BASE = f"{settings.odoo_url.rstrip('/')}/shop"
 
@@ -62,6 +64,7 @@ class Catalogo:
         self._cache: list[Producto] = []
         self._cache_ts: float = 0.0
         self._lock = asyncio.Lock()
+        self._ultimo_aviso: float = -_COOLDOWN_AVISO  # permite avisar la 1ra vez
 
     async def _cargar(self) -> list[Producto]:
         ctx = (
@@ -93,10 +96,23 @@ class Catalogo:
         # lo publicó (no lo quiso) o no tiene foto, no se le muestra al cliente:
         # casi siempre pide la imagen y no habría forma de dársela.
         # (image_128 se computa desde la imagen subida; vacío = sin foto real.)
-        tmpls = [
+        # FAIL-SAFE (igual que el filtro de stock): si este filtro dejaría el catálogo
+        # VACÍO (despublicación masiva, reimportación de Odoo, campo que dejó de venir),
+        # NO se aplica y se avisa. Antes devolvía [] en silencio y TODO cliente recibía
+        # "No hay productos disponibles" sin ninguna traza.
+        publicados = [
             t for t in tmpls
             if t.get("is_published") is True and t.get("image_128")
         ]
+        if publicados:
+            tmpls = publicados
+        elif tmpls:
+            log.warning("catalogo_filtro_publicado_vacio_ignorado", total=len(tmpls))
+            await self._avisar_catalogo_degradado(
+                f"El filtro de publicados/con-foto dejaria el catalogo VACIO "
+                f"({len(tmpls)} productos activos). Se ignoro el filtro para no dejar "
+                f"al bot sin productos. Revisa en Odoo 'Publicado en web' y las fotos."
+            )
         # Filtro por stock (SOLO_CON_STOCK): oculta agotados. FAIL-SAFE: si dejaría
         # el catálogo VACÍO (qty_available no es confiable en este Odoo, llega 0/None),
         # NO se aplica, para no dejar al bot sin productos. Apagado por defecto.
@@ -121,7 +137,9 @@ class Catalogo:
             "product.product",
             [["product_tmpl_id", "in", ids], ["active", "=", True]],
             ["id", "product_tmpl_id", "lst_price"],
-            limit=1000,
+            # 500 plantillas pueden tener más de 1000 variantes; con el tope viejo
+            # las últimas quedaban sin variante y se les fabricaba un id inválido.
+            limit=5000,
             context=ctx or None,
         )
         variant_por_tmpl: dict[int, int] = {}
@@ -137,6 +155,25 @@ class Catalogo:
                 if p is not None:
                     precio_por_tmpl[tid] = float(p)
 
+        # Sin variante activa NO se puede vender: el id de la PLANTILLA no es un
+        # product.product válido y, usado como product_id en sale.order.line, apunta
+        # a otro producto o revienta con Fault. Antes se fabricaba ese id; ahora el
+        # producto se excluye del catálogo (mejor no ofrecerlo que crear un pedido mal).
+        sin_variante = [t["id"] for t in tmpls if t["id"] not in variant_por_tmpl]
+        if sin_variante:
+            log.warning("catalogo_sin_variante_excluidos", ids=sin_variante[:20],
+                        total=len(sin_variante))
+        vendibles = [t for t in tmpls if t["id"] in variant_por_tmpl]
+        # FAIL-SAFE: si esto vaciara el catálogo, es un problema de la consulta de
+        # variantes, no del catálogo real -> avisar y no dejar al bot sin productos.
+        if not vendibles and tmpls:
+            log.warning("catalogo_sin_variantes_todo_ignorado", total=len(tmpls))
+            await self._avisar_catalogo_degradado(
+                f"Ningun producto tiene variante activa en Odoo ({len(tmpls)} "
+                f"plantillas). Se ignora el filtro; revisa las variantes en Odoo."
+            )
+            vendibles = tmpls
+
         productos = [
             Producto(
                 tmpl_id=t["id"],
@@ -147,10 +184,26 @@ class Catalogo:
                 ),
                 website_slug=t.get("website_slug") or "",
             )
-            for t in tmpls
+            for t in vendibles
         ]
         log.info("catalogo_cargado", productos=len(productos))
         return productos
+
+    async def _avisar_catalogo_degradado(self, detalle: str) -> None:
+        """Avisa al admin que un filtro habría vaciado el catálogo. Con cooldown:
+        la caché recarga cada pocos minutos y no queremos spamear WhatsApp."""
+        ahora = time.monotonic()
+        if ahora - self._ultimo_aviso < _COOLDOWN_AVISO:
+            return
+        self._ultimo_aviso = ahora
+        # Telegram y no WhatsApp: avisar_admin necesita un emisor y aquí no hay
+        # conversación de la que sacarlo (con 2 números, YCLOUD_FROM va vacío).
+        try:
+            from app.panel import telegram  # import perezoso: evita ciclo de imports
+
+            await telegram.enviar(f"🟠 CATÁLOGO: {detalle}")
+        except Exception as exc:  # noqa: BLE001
+            log.warning("catalogo_aviso_fallo", error=str(exc))
 
     def _fresco(self, now: float) -> bool:
         return bool(self._cache) and (now - self._cache_ts) <= settings.catalogo_cache_seconds

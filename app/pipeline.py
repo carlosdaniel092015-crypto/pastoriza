@@ -56,6 +56,12 @@ MSG_LIVIANO = "😊 Con gusto te ayudo. Dime qué envase o producto buscas."
 # cliente se queda esperando una respuesta que nunca llega.
 _TAREAS_VIVAS: set[asyncio.Task] = set()
 
+# Cuánto esperar el lock de la conversación cuando otro turno del mismo chat está
+# corriendo (ráfaga del cliente). Debe superar el peor turno (agente_timeout + envío)
+# para no mandar un falso "inconveniente tecnico"; queda por debajo del TTL del lock
+# (180s) para no esperar sobre un lock que ya expiró.
+_ESPERA_LOCK_MAX = settings.agente_timeout + 40.0
+
 # Red de seguridad mínima (10 líneas, no las 100 del nodo `Clasificar Respuesta1`):
 # el modelo ya no PUEDE crear un pedido inventado, pero sí podría redactar una
 # frase que lo insinúe. Si lo hace sin order_id real, la reemplazamos.
@@ -144,20 +150,33 @@ async def _turno_diferido(msg: InboundMessage) -> None:
         if not await esperar_turno(msg):
             return
         async with conversation_lock(msg.chat_id) as obtenido:
-            if not obtenido:
-                log.info("turno_en_curso_reprogramando", chat_id=msg.chat_id)
-                await asyncio.sleep(3)
-                async with conversation_lock(msg.chat_id) as reintento:
-                    if reintento:
-                        await procesar_turno(msg)
-                    else:
-                        # No pudimos tomar el lock ni al reintento: en vez de
-                        # descartar el mensaje en silencio (dejando al cliente sin
-                        # respuesta), avisamos y escalamos.
-                        log.warning("lock_no_obtenido_fallback", chat_id=msg.chat_id)
-                        await _fallback_error(msg)
+            if obtenido:
+                await procesar_turno(msg)
                 return
-            await procesar_turno(msg)
+
+        # Otro turno de este MISMO chat está corriendo (ráfaga del cliente: patrón
+        # normal en WhatsApp). Antes se esperaba 3s y se mandaba un falso "tuve un
+        # inconveniente tecnico" + aviso al admin, y el mensaje quedaba sin atender:
+        # el turno en curso puede tardar hasta agente_timeout (90s). Ahora esperamos
+        # a que libere, con backoff, porque el mensaje sigue en el buffer y se drena
+        # al tomar el lock.
+        log.info("turno_en_curso_esperando", chat_id=msg.chat_id)
+        esperado = 0.0
+        paso = 2.0
+        while esperado < _ESPERA_LOCK_MAX:
+            await asyncio.sleep(paso)
+            esperado += paso
+            paso = min(paso * 1.5, 8.0)
+            async with conversation_lock(msg.chat_id) as reintento:
+                if reintento:
+                    # exigir_buffer: si el turno anterior YA drenó (y respondió)
+                    # nuestro mensaje, el buffer está vacío -> no responder de nuevo.
+                    await procesar_turno(msg, exigir_buffer=True)
+                    return
+        # Esperamos más que el peor turno posible y el lock sigue tomado: esto sí es
+        # una falla real (turno colgado o lock huérfano), no una simple ráfaga.
+        log.warning("lock_no_obtenido_timeout", chat_id=msg.chat_id, esperado=esperado)
+        await _fallback_error(msg)
     except Exception as exc:  # noqa: BLE001
         log.exception("turno_fallo", chat_id=msg.chat_id, error=str(exc))
         await panel_events.publicar(
@@ -216,23 +235,43 @@ async def _combinar(msgs: list[InboundMessage]) -> tuple[str, str, str, bool]:
         if t:
             partes.append(t)
 
+    audios_fallidos = 0
     for a in audios:
         transcripcion = await transcribir_audio(a.media_url)
         if transcripcion:
             partes.append(f"<audio>\n{transcripcion}\n</audio>")
+        else:
+            audios_fallidos += 1
 
     imagen_url = ""
     es_comprobante = False
     if imagenes:
         imagen_url = imagenes[0].media_url
         descripcion, es_comprobante = await analizar_imagen(imagen_url)
-        bloque = ["# EL CLIENTE ENVIO UNA IMAGEN", "## ANALISIS VISUAL:", descripcion]
+        bloque = ["# EL CLIENTE ENVIO UNA IMAGEN"]
+        # El CAPTION de la imagen es lo que el cliente ESCRIBIÓ ("quiero esta de 8
+        # oz"): antes se descartaba (sólo entraban los content_type == "text") y se
+        # perdía su intención, quedando únicamente el análisis visual.
+        captions = [m.content for m in imagenes if m.content]
+        if captions:
+            bloque.append("## LO QUE ESCRIBIO CON LA IMAGEN: " + " | ".join(captions))
+        bloque += ["## ANALISIS VISUAL:", descripcion]
         if len(imagenes) > 1:
             bloque.append(
                 f"[El cliente envio {len(imagenes)} imagenes. Analiza la primera; "
                 "si necesitas ver las demas, pidelas de una en una.]"
             )
         partes.append("\n".join(bloque))
+
+    # Si Whisper falló y el audio era lo ÚNICO que mandó el cliente, sin esto el
+    # turno terminaba en "turno_vacio" y el cliente se quedaba esperando para
+    # siempre. Damos contexto al agente para que pida que lo escriba.
+    if audios_fallidos and not partes:
+        log.warning("audio_sin_transcripcion", audios=audios_fallidos)
+        partes.append(
+            "[AUDIO_NO_ENTENDIDO] El cliente mando una nota de voz que no se pudo "
+            "escuchar. Pidele con amabilidad que la repita o que te lo escriba."
+        )
 
     texto = "\n".join(p for p in partes if p).strip()
 
@@ -249,10 +288,17 @@ async def _combinar(msgs: list[InboundMessage]) -> tuple[str, str, str, bool]:
 
 
 # -------------------------------------------------------------- el turno ---
-async def procesar_turno(trigger: InboundMessage) -> None:
+async def procesar_turno(
+    trigger: InboundMessage, exigir_buffer: bool = False
+) -> None:
     chat_id = trigger.chat_id
     msgs = await drenar(chat_id)
     if not msgs:
+        if exigir_buffer:
+            # Vinimos de esperar el lock: el turno anterior ya drenó y respondió
+            # este mensaje. Reprocesar el trigger mandaría una respuesta DUPLICADA.
+            log.info("turno_ya_atendido_por_otro", chat_id=chat_id)
+            return
         msgs = [trigger]
 
     emisor = settings.ycloud_from or trigger.instance_from
