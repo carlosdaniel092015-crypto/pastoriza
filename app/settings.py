@@ -77,6 +77,9 @@ class Settings(BaseSettings):
     precios_guardados_con_itbis: bool = True
     itbis_rate: float = 0.18
     catalogo_cache_seconds: int = 300
+    # Mostrar SOLO productos con stock disponible (qty_available > 0). El cliente
+    # maneja stock real en Odoo. Poner SOLO_CON_STOCK=false si alguna vez oculta de más.
+    solo_con_stock: bool = True
     # Tope de fotos por respuesta. Alto para poder mostrar TODOS los envases de una
     # medida (ej. "las de 12 oz") cuando el cliente pide ver esa categoría.
     max_imagenes_por_mensaje: int = 10
