@@ -72,7 +72,7 @@ class Catalogo:
         tmpls = await odoo.search_read(
             "product.template",
             [["active", "=", True]],
-            ["id", "name", "list_price", "is_published", "image_128"],
+            ["id", "name", "list_price", "is_published", "image_128", "qty_available"],
             limit=500,
             order="name asc",
             context=ctx or None,
@@ -91,6 +91,15 @@ class Catalogo:
             t for t in tmpls
             if t.get("is_published") is True and t.get("image_128")
         ]
+        # Regla de negocio: SOLO productos CON stock disponible (el cliente maneja
+        # stock real). Evita ofrecer/matchear un envase agotado. Desactivable con
+        # SOLO_CON_STOCK=false si el dato de stock no fuera confiable.
+        if settings.solo_con_stock:
+            antes = len(tmpls)
+            tmpls = [t for t in tmpls if float(t.get("qty_available") or 0) > 0]
+            filtrados = antes - len(tmpls)
+            if filtrados:
+                log.info("catalogo_filtro_stock", con_stock=len(tmpls), sin_stock=filtrados)
 
         if not tmpls:
             return []
