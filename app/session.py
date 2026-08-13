@@ -19,6 +19,39 @@ from app.settings import settings
 log = get_logger(__name__)
 
 
+def _emparejar_tools(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Quita tool-calls huérfanos que rompen la API de OpenAI.
+
+    El recorte del historial (ltrim a max_items) puede cortar entre un
+    `function_call` y su `function_call_output`, dejando uno sin el otro. Si ese
+    huérfano llega al modelo, la API responde 400 "No tool call found for function
+    call output with call_id ...". Aquí conservamos SOLO los pares completos (la
+    call y su output ambos presentes); los mensajes normales no se tocan. Sanea
+    tanto historiales nuevos como los que ya quedaron corruptos en Redis.
+    """
+    calls: set[str] = set()
+    outs: set[str] = set()
+    for it in items:
+        cid = it.get("call_id")
+        if not cid:
+            continue
+        tipo = it.get("type")
+        if tipo == "function_call":
+            calls.add(cid)
+        elif tipo == "function_call_output":
+            outs.add(cid)
+    completos = calls & outs
+    limpio: list[dict[str, Any]] = []
+    for it in items:
+        if it.get("type") in ("function_call", "function_call_output"):
+            if it.get("call_id") in completos:
+                limpio.append(it)
+            # huérfano -> se descarta
+        else:
+            limpio.append(it)
+    return limpio
+
+
 class RedisSession:
     """Lista Redis con los items del historial (JSON por elemento).
 
@@ -48,7 +81,7 @@ class RedisSession:
                 out.append(json.loads(item))
             except json.JSONDecodeError:
                 continue
-        return out
+        return _emparejar_tools(out)
 
     async def add_items(self, items: list[dict[str, Any]]) -> None:
         if not items:
