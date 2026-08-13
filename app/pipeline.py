@@ -14,7 +14,8 @@ import traceback
 
 from agents import MaxTurnsExceeded, Runner
 
-from app.agents import ESPECIALISTAS, RespuestaBot, analizar_contexto
+from app.agents import RespuestaBot, analizar_contexto
+from app.agents import obtener as obtener_especialista
 from app.business_config import get_producto_de_anuncio, load_config
 from app.catalogo import catalogo
 from app.context import ConversationContext
@@ -462,7 +463,8 @@ async def _correr_agente(
     try:
         result = await asyncio.wait_for(
             Runner.run(
-                ESPECIALISTAS[nombre],
+                # obtener(): agente base o PERSONALIZADO creado desde el panel.
+                obtener_especialista(nombre),
                 texto,
                 context=ctx,
                 session=session,

@@ -35,7 +35,7 @@ from app.estado import limpiar_revision, listar_revision, pausar_bot, reactivar_
 from app.logging_conf import get_logger, setup_logging
 from app.models import parse_inbound, parse_outbound_command
 from app.odoo import odoo
-from app.panel import conocimiento, prompt_store, telegram
+from app.panel import agentes_custom, conocimiento, prompt_store, telegram
 from app.panel.analista import analizar_y_sugerir
 from app.panel.router import panel_router
 from app.pipeline import manejar_entrante, manejar_saliente, precalentar
@@ -96,6 +96,9 @@ async def lifespan(app: FastAPI):
         allowlist=sorted(settings.allowlist) or "todos",
     )
     await precalentar()
+    # agentes_custom PRIMERO: prompt_store carga también los prompts de los agentes
+    # creados desde el panel, y necesita saber sus nombres.
+    await agentes_custom.cargar()
     await prompt_store.cargar()
     await conocimiento.cargar()
 

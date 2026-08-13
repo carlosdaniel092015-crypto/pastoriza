@@ -5,6 +5,8 @@ común; `ESPECIALISTAS` mapea nombre→Agent; `elegir_agente` es el enrutado det
 """
 from app.agents.base import RespuestaBot
 from app.agents.enrutador import analizar_contexto, elegir_agente
-from app.agents.especialistas import ESPECIALISTAS
+from app.agents.especialistas import ESPECIALISTAS, obtener
 
-__all__ = ["RespuestaBot", "ESPECIALISTAS", "elegir_agente", "analizar_contexto"]
+__all__ = [
+    "RespuestaBot", "ESPECIALISTAS", "elegir_agente", "analizar_contexto", "obtener",
+]

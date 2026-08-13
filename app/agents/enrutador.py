@@ -81,6 +81,31 @@ def senales_humano(texto: str) -> bool:
     return bool(RE_PIDE_HUMANO.search(n) or RE_AMERITA_HUMANO.search(n))
 
 
+def ruta_personalizada(texto: str) -> str | None:
+    """Enrutado a un agente PERSONALIZADO por sus palabras clave (0 tokens).
+
+    Se consulta DESPUÉS de reclamos/cancelaciones (esas mandan a soporte siempre) y
+    ANTES de las reglas genéricas de ventas/pedido, para que un agente creado en el
+    panel pueda capturar su nicho (ej. "al por mayor" -> agente mayorista).
+    """
+    from app.panel import agentes_custom
+
+    n = _norm(texto)
+    if not n:
+        return None
+    mejor: tuple[int, str] | None = None
+    for cfg in agentes_custom.listar():
+        if not cfg.get("activo", True):
+            continue
+        for palabra in cfg.get("palabras", []):
+            p = _norm(palabra)
+            if p and p in n:
+                # Gana la coincidencia más específica (la palabra más larga).
+                if mejor is None or len(p) > mejor[0]:
+                    mejor = (len(p), str(cfg["nombre"]))
+    return mejor[1] if mejor else None
+
+
 def ruta_deterministica(
     texto: str, es_comprobante: bool = False, tiene_imagen: bool = False
 ) -> str | None:
@@ -97,6 +122,10 @@ def ruta_deterministica(
     # 2. Reclamo/cancelación gana sobre todo.
     if RE_SOPORTE.search(n):
         return "soporte"
+    # 2b. Agentes PERSONALIZADOS del panel: capturan su nicho por palabras clave.
+    custom = ruta_personalizada(n)
+    if custom:
+        return custom
     # 3. Señales claras de cierre -> pedido.
     if RE_CIERRE.search(n):
         return "pedido"
@@ -166,6 +195,20 @@ async def _determinar(texto: str, session=None) -> Veredicto:
         except Exception:  # noqa: BLE001
             contexto = ""
 
+    # Los agentes creados desde el panel también son destinos válidos: se los
+    # describimos al determinador para que pueda elegirlos cuando corresponda.
+    from app.panel import agentes_custom
+
+    extra = ""
+    validos = set(VALIDOS)
+    customs = [c for c in agentes_custom.listar() if c.get("activo", True)]
+    if customs:
+        extra = "\nAgentes adicionales disponibles:\n" + "\n".join(
+            f'- {c["nombre"]}: {c.get("descripcion") or "sin descripcion"}'
+            for c in customs
+        )
+        validos |= {str(c["nombre"]) for c in customs}
+
     try:
         resp = await _openai.chat.completions.create(
             model=settings.model_mini,
@@ -175,7 +218,9 @@ async def _determinar(texto: str, session=None) -> Veredicto:
             messages=[
                 {
                     "role": "system",
-                    "content": get_prompt("enrutador") + "\n\n" + INSTR_DETERMINADOR,
+                    "content": (
+                        get_prompt("enrutador") + "\n\n" + INSTR_DETERMINADOR + extra
+                    ),
                 },
                 {
                     "role": "user",
@@ -188,7 +233,7 @@ async def _determinar(texto: str, session=None) -> Veredicto:
         )
         data = json.loads(resp.choices[0].message.content or "{}")
         agente = str(data.get("agente", "")).strip().lower()
-        if agente not in VALIDOS:
+        if agente not in validos:
             # El modelo pudo responder con texto libre: buscamos el nombre dentro.
             agente = next((a for a in ("pedido", "soporte", "ventas") if a in agente), "ventas")
         permite = bool(data.get("amerita_humano") is True)
