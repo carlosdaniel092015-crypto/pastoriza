@@ -7,8 +7,10 @@ ENV PYTHONUNBUFFERED=1 \
 
 WORKDIR /srv
 
+# ffmpeg: convierte las notas de voz del panel (webm/opus del navegador) a
+# ogg/opus, el formato que acepta WhatsApp/YCloud.
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends curl tzdata \
+    && apt-get install -y --no-install-recommends curl tzdata ffmpeg \
     && rm -rf /var/lib/apt/lists/*
 
 COPY requirements.txt .
