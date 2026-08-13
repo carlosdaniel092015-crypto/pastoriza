@@ -7,10 +7,17 @@ ENV PYTHONUNBUFFERED=1 \
 
 WORKDIR /srv
 
-# ffmpeg: convierte las notas de voz del panel (webm/opus del navegador) a
-# ogg/opus, el formato que acepta WhatsApp/YCloud.
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends curl tzdata ffmpeg \
+    && apt-get install -y --no-install-recommends curl tzdata \
+    && rm -rf /var/lib/apt/lists/*
+
+# ffmpeg (OPCIONAL): convierte las notas de voz del panel (webm/opus del navegador)
+# a ogg/opus, el formato que acepta WhatsApp/YCloud. Va en su propia capa y NO es
+# fatal a propósito: si el paquete falla, el bot igual despliega y atiende clientes
+# (solo la nota de voz responde "no se pudo convertir el audio"). Una feature
+# opcional no debe bloquear el deploy de la venta.
+RUN apt-get update \
+    && (apt-get install -y --no-install-recommends ffmpeg || echo "AVISO: ffmpeg no instalado; las notas de voz del panel quedan deshabilitadas") \
     && rm -rf /var/lib/apt/lists/*
 
 COPY requirements.txt .
