@@ -80,6 +80,8 @@ PANEL_HTML = r"""<!doctype html>
   nav.side .it .badge{margin-left:auto;min-width:16px;height:16px;padding:0 4px;background:var(--err);color:#fff;border-radius:8px;font-size:10px;line-height:16px;text-align:center;font-family:var(--mono)}
   nav.side .foot{margin-top:auto;padding:10px 14px}
   .themebtn{width:34px;height:34px;border-radius:8px;border:1px solid var(--line);background:var(--panel2);color:var(--mut);font-size:15px}
+  /* Versión corriendo en el servidor: distingue "no se desplegó" de "no funciona". */
+  .ver{margin-top:6px;font-size:10px;color:var(--mut);opacity:.75}
 
   main{min-width:0;min-height:0;overflow:hidden}
   .view{display:none;height:100%}
@@ -335,7 +337,7 @@ PANEL_HTML = r"""<!doctype html>
       <button class="it" data-v="config"><span class="n">03</span>Config</button>
       <button class="it" data-v="prompt"><span class="n">04</span>Prompt</button>
       <button class="it" data-v="aprendizaje"><span class="n">05</span>Aprendizaje<span class="badge" id="badgeSug" style="display:none">0</span></button>
-      <div class="foot"><button class="themebtn" onclick="toggleTheme()" id="themebtn" title="Cambiar tema">☾</button></div>
+      <div class="foot"><button class="themebtn" onclick="toggleTheme()" id="themebtn" title="Cambiar tema">☾</button><div class="ver mono" id="ver" title="Versión que está corriendo en el servidor">—</div></div>
     </nav>
 
     <main>
@@ -844,7 +846,13 @@ function notificarEvento(e){ const info=notifTexto(e); if(!info)return;
 
 // boot
 async function boot(){ renderFiltros(); tick(); setInterval(tick,20000); pintarTema(document.documentElement.getAttribute('data-theme')==='light'); refreshNotifBtn();
-  try{ await fetch('/panel/api/whoami',{headers:headers()}); }catch(e){}
+  // Mostrar la versión que corre en el servidor: si acá se ve un commit viejo, lo
+  // que falló es el DEPLOY, no el código (antes no había forma de saberlo).
+  try{ const w=await (await fetch('/panel/api/whoami',{headers:headers()})).json();
+    const v=(w&&w.version)||{}; const el=$('#ver');
+    if(el) el.textContent = v.commit ? ('v '+v.commit) : '—';
+    if(el&&v.rama&&v.rama!=='-') el.title='Corriendo commit '+v.commit+' ('+v.rama+')';
+  }catch(e){}
   await loadGlobal(); await loadChats(); await pollEvents();
   notifPrimed=true;
   clearInterval(window._t1); clearInterval(window._t2); window._t1=setInterval(pollEvents,3000); window._t2=setInterval(loadChats,10000);
