@@ -114,9 +114,14 @@ def respuesta_directa(
         )
 
     if RE_ENVIO_RETIRO.match(norm) or RE_ENVIO.search(norm):
-        return (
+        envio = (
             f"Envio a domicilio\n"
-            f"Costo: RD${cfg.precio_envio}. Dias: {cfg.dias_envio}. {cfg.nota_envio}.\n\n"
+            f"Costo: RD${cfg.precio_envio}. Dias: {cfg.dias_envio}. {cfg.nota_envio}."
+        )
+        if getattr(cfg, "minimo_envio", ""):
+            envio += f"\nMinimo para envio: {cfg.minimo_envio}"
+        return (
+            f"{envio}\n\n"
             f"Retiro en tienda (gratis)\n{cfg.direccion}\n"
             f"Horario: {cfg.horario_tienda}\n\nCual prefieres?"
         )

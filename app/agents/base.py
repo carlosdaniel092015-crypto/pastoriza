@@ -55,6 +55,9 @@ Si no tienes un dato: "Para esa información contáctanos al +1 829 471-6701."
 # PAGO Y MÍNIMO (regla de negocio)
 Pedido MÍNIMO: RD${cfg.monto_minimo}. Si el total no llega, díselo con amabilidad
 y ofrece sumar más unidades o productos hasta alcanzarlo.
+Mínimo de unidades para ENVÍO a domicilio: {cfg.minimo_envio} Si el cliente quiere
+envío y no llega al mínimo de su tamaño, díselo con amabilidad y ofrécele el retiro
+en tienda (sin mínimo) o sumar unidades hasta alcanzarlo.
 Formas de pago: {cfg.formas_pago}.
 Pago contra entrega: {"NO se acepta" if str(cfg.contra_entrega).strip().lower() in ("no", "false", "0", "") else cfg.contra_entrega}."""
     ]
