@@ -81,6 +81,19 @@ async def manejar_entrante(msg: InboundMessage) -> None:
         log.info("fuera_de_allowlist", chat_id=msg.chat_id)
         return
 
+    # Dedup: si YCloud reintenta el webhook o entrega el mismo mensaje dos veces,
+    # lo procesamos UNA sola vez (si no, el bot responde duplicado).
+    if await es_duplicado(msg):
+        log.info("webhook_duplicado_ignorado", chat_id=msg.chat_id, message_id=msg.message_id)
+        return
+
+    # El chat aparece en el panel APENAS entra el mensaje. Antes sólo se registraba
+    # DESPUÉS de que el bot respondía (debounce de 6s + el turno), así que una
+    # conversación nueva tardaba en aparecer y a veces había que refrescar a mano.
+    # Va antes de los cortes de abajo a propósito: con el bot apagado o pausado
+    # (control humano) es cuando MÁS importa verla en el panel.
+    await _registrar_entrante(msg)
+
     if await bot_global_apagado():
         log.info("bot_global_off_ignorando", chat_id=msg.chat_id)
         return
@@ -89,16 +102,44 @@ async def manejar_entrante(msg: InboundMessage) -> None:
         log.info("bot_pausado_ignorando", chat_id=msg.chat_id)
         return
 
-    # Dedup: si YCloud reintenta el webhook o entrega el mismo mensaje dos veces,
-    # lo procesamos UNA sola vez (si no, el bot responde duplicado).
-    if await es_duplicado(msg):
-        log.info("webhook_duplicado_ignorado", chat_id=msg.chat_id, message_id=msg.message_id)
-        return
-
     await acumular(msg)
     tarea = asyncio.create_task(_turno_diferido(msg))
     _TAREAS_VIVAS.add(tarea)
     tarea.add_done_callback(_TAREAS_VIVAS.discard)
+
+
+# Qué mostrar en la lista cuando el mensaje no es texto (aún no se transcribió).
+_ETIQUETA_MEDIA = {
+    "audio": "🎤 (nota de voz)",
+    "image": "📷 (imagen)",
+    "location": "📍 (ubicación)",
+    "video": "🎬 (video)",
+    "document": "📄 (documento)",
+    "sticker": "(sticker)",
+}
+
+
+async def _registrar_entrante(msg: InboundMessage) -> None:
+    """Deja la conversación visible en el panel al instante (no espera al bot)."""
+    texto = (msg.content or "").strip() or _ETIQUETA_MEDIA.get(
+        msg.content_type, "(mensaje)"
+    )
+    try:
+        await panel_events.tocar_chatmeta(
+            msg.chat_id,
+            emisor=settings.ycloud_from or msg.instance_from,
+            destino=msg.destino_ycloud(),
+            user_name=msg.user_name or "",
+            telefono=msg.telefono or "",
+            ultimo=texto[:200],
+            ultimo_de="cliente",
+        )
+        await panel_events.publicar(
+            "entrante", msg.chat_id, user_name=msg.user_name or "", texto=texto[:200]
+        )
+    except Exception as exc:  # noqa: BLE001
+        # Que el panel no reciba el aviso NO puede impedir atender al cliente.
+        log.warning("registrar_entrante_fallo", chat_id=msg.chat_id, error=str(exc))
 
 
 async def manejar_saliente(body: dict) -> None:
