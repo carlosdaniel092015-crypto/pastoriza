@@ -23,6 +23,7 @@ from fastapi.responses import JSONResponse, Response
 from app.media import close_http as close_media_http
 from app.media import convertir_a_jpg, descargar
 
+from app import canario
 from app.business_config import (
     config_as_dict,
     listar_anuncios,
@@ -87,6 +88,29 @@ async def _loop_analista() -> None:
         await asyncio.sleep(intervalo)
 
 
+async def _loop_canario() -> None:
+    """Vigila el bot (catálogo, Redis, escaladas) y avisa por Telegram si se rompe.
+
+    Existe porque las fallas graves son SILENCIOSAS para quien opera: el bot sigue
+    contestando pero le dice a todos "no tengo productos". Sin esto, el operador se
+    entera por la captura de un cliente que ya se fue.
+    """
+    intervalo = max(1, settings.canario_intervalo_minutos) * 60
+    await asyncio.sleep(45)  # dejar que arranque y se cargue el catálogo
+    try:
+        await canario.revisar_y_avisar(arranque=True)
+    except Exception as exc:  # noqa: BLE001
+        log.error("canario_fallo", error=str(exc))
+    while True:
+        await asyncio.sleep(intervalo)
+        try:
+            await canario.revisar_y_avisar()
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:  # noqa: BLE001
+            log.error("canario_fallo", error=str(exc))
+
+
 @contextlib.asynccontextmanager
 async def lifespan(app: FastAPI):
     log.info(
@@ -106,6 +130,9 @@ async def lifespan(app: FastAPI):
     if settings.analista_auto:
         tareas.append(asyncio.create_task(_loop_analista()))
         log.info("analista_scheduler_on", cada_horas=settings.analista_intervalo_horas)
+    if settings.canario_activo:
+        tareas.append(asyncio.create_task(_loop_canario()))
+        log.info("canario_on", cada_minutos=settings.canario_intervalo_minutos)
     # Registrar el webhook de Telegram para los botones Aprobar/Rechazar.
     if telegram.configurado() and settings.base_url and settings.telegram_webhook_secret:
         await telegram.set_webhook(
@@ -392,5 +419,17 @@ async def health_deep() -> dict:
     estado["odoo"] = await odoo.ping()
     with contextlib.suppress(Exception):
         estado["catalogo"] = len(await catalogo.todos())
-    estado["status"] = "ok" if estado["redis"] and estado["odoo"] else "degraded"
+    # El catálogo vacío es una falla REAL aunque Redis y Odoo respondan: el bot le
+    # dice a todos los clientes que no hay productos. Que el health lo refleje.
+    estado["status"] = (
+        "ok"
+        if estado["redis"] and estado["odoo"] and estado["catalogo"] > 0
+        else "degraded"
+    )
     return estado
+
+
+@app.get("/health/canario")
+async def health_canario(_: None = Depends(require_token)) -> dict:
+    """Estado del canario a demanda: qué está roto y por qué, en texto claro."""
+    return await canario.revisar()
