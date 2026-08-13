@@ -447,7 +447,7 @@ async def api_correccion_del(
 @panel_router.post("/api/sugerencias/analizar")
 async def api_analizar(x_panel_token: str | None = Header(default=None)) -> dict:
     _auth(x_panel_token)
-    resultado = await analizar_y_sugerir(auto_aplicar_bajo_riesgo=True)
+    resultado = await analizar_y_sugerir(auto_aplicar_bajo_riesgo=False)
     return {"ok": True, **resultado}
 
 

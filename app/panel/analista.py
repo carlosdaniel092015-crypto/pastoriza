@@ -33,7 +33,7 @@ Devuelve SOLO este JSON: {"sugerencias":[{"texto":"...","riesgo":"bajo|alto"}]}.
 riesgo=bajo si es un ajuste menor de redacción/FAQ; riesgo=alto si cambia el flujo de venta o toca datos sensibles."""
 
 
-async def analizar_y_sugerir(auto_aplicar_bajo_riesgo: bool = True) -> dict:
+async def analizar_y_sugerir(auto_aplicar_bajo_riesgo: bool = False) -> dict:
     """Analiza la cola de revisión y crea sugerencias. Devuelve un resumen."""
     revision = await listar_revision(80)
     if not revision:
@@ -73,6 +73,7 @@ async def analizar_y_sugerir(auto_aplicar_bajo_riesgo: bool = True) -> dict:
     propuestas = data.get("sugerencias", []) if isinstance(data, dict) else []
     creadas = 0
     auto = 0
+    pendientes: list[dict] = []
     for p in propuestas:
         texto = str(p.get("texto", "")).strip()
         if not texto:
@@ -84,18 +85,25 @@ async def analizar_y_sugerir(auto_aplicar_bajo_riesgo: bool = True) -> dict:
             await conocimiento._set_estado_sugerencia(s["id"], "aprobada")
             auto += 1
         else:
-            await conocimiento.add_sugerencia("regla", texto, riesgo, "analisis")
+            s = await conocimiento.add_sugerencia("regla", texto, riesgo, "analisis")
+            pendientes.append(s)
         creadas += 1
 
-    if creadas and telegram.configurado():
+    # Aviso a Telegram: resumen + una tarjeta por sugerencia con botones Aprobar/Rechazar.
+    if pendientes and telegram.configurado():
         await telegram.enviar(
-            f"🧠 Analista: {creadas} sugerencia(s) nueva(s) del bot "
-            f"({auto} aplicada(s) auto por bajo riesgo). Revisa el panel → Aprendizaje."
+            f"🧠 Analista: {len(pendientes)} sugerencia(s) para revisar. "
+            "Apruébalas o recházalas aquí abajo (o en el panel → Aprendizaje)."
         )
+        for s in pendientes:
+            await telegram.enviar_sugerencia(s)
+    elif auto and telegram.configurado():
+        await telegram.enviar(f"🧠 Analista: {auto} sugerencia(s) aplicada(s) automáticamente.")
 
     return {
         "analizado": len(revision),
         "sugeridas": creadas,
         "auto_aplicadas": auto,
+        "pendientes": len(pendientes),
         "motivos_top": dict(motivos.most_common(5)),
     }

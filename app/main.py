@@ -11,6 +11,7 @@ Endpoints:
 """
 from __future__ import annotations
 
+import asyncio
 import contextlib
 import hmac
 from typing import Any
@@ -35,6 +36,7 @@ from app.logging_conf import get_logger, setup_logging
 from app.models import parse_inbound, parse_outbound_command
 from app.odoo import odoo
 from app.panel import conocimiento, prompt_store, telegram
+from app.panel.analista import analizar_y_sugerir
 from app.panel.router import panel_router
 from app.pipeline import manejar_entrante, manejar_saliente, precalentar
 from app.redis_client import close_redis, get_redis
@@ -64,6 +66,27 @@ def require_token(x_panel_token: str | None = Header(default=None)) -> None:
         raise HTTPException(status_code=401, detail="token inválido")
 
 
+async def _loop_analista() -> None:
+    """Corre el analista de aprendizaje cada `analista_intervalo_horas` (default 24h).
+
+    Vive en el único worker (ver Dockerfile). Espera un rato al arrancar para dejar
+    acumular casos y no analizar sobre una cola recién levantada.
+    """
+    intervalo = max(1, settings.analista_intervalo_horas) * 3600
+    await asyncio.sleep(min(intervalo, 3600))
+    while True:
+        try:
+            res = await analizar_y_sugerir(auto_aplicar_bajo_riesgo=False)
+            log.info("analista_auto_corrida", **{
+                k: v for k, v in res.items() if isinstance(v, (int, str))
+            })
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:  # noqa: BLE001
+            log.error("analista_auto_fallo", error=str(exc))
+        await asyncio.sleep(intervalo)
+
+
 @contextlib.asynccontextmanager
 async def lifespan(app: FastAPI):
     log.info(
@@ -75,7 +98,23 @@ async def lifespan(app: FastAPI):
     await precalentar()
     await prompt_store.cargar()
     await conocimiento.cargar()
+
+    tareas: list[asyncio.Task] = []
+    if settings.analista_auto:
+        tareas.append(asyncio.create_task(_loop_analista()))
+        log.info("analista_scheduler_on", cada_horas=settings.analista_intervalo_horas)
+    # Registrar el webhook de Telegram para los botones Aprobar/Rechazar.
+    if telegram.configurado() and settings.base_url and settings.telegram_webhook_secret:
+        await telegram.set_webhook(
+            f"{settings.base_url}/webhook/telegram", settings.telegram_webhook_secret
+        )
+
     yield
+
+    for t in tareas:
+        t.cancel()
+    with contextlib.suppress(Exception):
+        await asyncio.gather(*tareas, return_exceptions=True)
     await ycloud.close()
     await telegram.close()
     await close_media_http()
@@ -144,6 +183,60 @@ async def webhook_ycloud(
         anuncio=bool(msg.referral),
     )
     background.add_task(manejar_entrante, msg)
+    return JSONResponse({"ok": True})
+
+
+@app.post("/webhook/telegram")
+async def webhook_telegram(request: Request) -> JSONResponse:
+    """Recibe los clics de los botones Aprobar/Rechazar de las sugerencias.
+
+    Seguridad: Telegram reenvía el secreto (fijado con setWebhook) en el header
+    X-Telegram-Bot-Api-Secret-Token; además exigimos que el chat sea el autorizado.
+    """
+    if not settings.telegram_webhook_secret:
+        raise HTTPException(status_code=404, detail="webhook de telegram no habilitado")
+    got = request.headers.get("X-Telegram-Bot-Api-Secret-Token")
+    if not _token_ok(got, settings.telegram_webhook_secret):
+        raise HTTPException(status_code=401, detail="secret inválido")
+
+    try:
+        update: dict[str, Any] = await request.json()
+    except Exception:  # noqa: BLE001
+        return JSONResponse({"ok": True})
+
+    cq = update.get("callback_query") or {}
+    if not cq:
+        return JSONResponse({"ok": True})
+
+    msg = cq.get("message") or {}
+    chat_id = str(((msg.get("chat") or {}).get("id")) or "")
+    # Solo el chat configurado puede accionar (evita que un tercero apruebe reglas).
+    if settings.telegram_chat_id and chat_id != str(settings.telegram_chat_id):
+        await telegram.responder_callback(str(cq.get("id", "")), "No autorizado")
+        return JSONResponse({"ok": True})
+
+    partes = str(cq.get("data") or "").split(":")
+    if len(partes) == 3 and partes[0] == "sug":
+        accion, sid_raw = partes[1], partes[2]
+        try:
+            sid = int(sid_raw)
+        except ValueError:
+            sid = None
+        if sid is not None:
+            if accion == "aprobar":
+                s = await conocimiento.aprobar_sugerencia(sid)
+                estado = "✅ Aprobada y aplicada" if s else "No encontrada"
+            elif accion == "rechazar":
+                s = await conocimiento.rechazar_sugerencia(sid)
+                estado = "❌ Rechazada" if s else "No encontrada"
+            else:
+                s, estado = None, "Acción desconocida"
+            await telegram.responder_callback(str(cq.get("id", "")), estado)
+            contenido = str((s or {}).get("contenido", ""))
+            await telegram.editar_texto(
+                chat_id, msg.get("message_id"),
+                f"<b>Sugerencia #{sid}</b> — {estado}\n\n{contenido}",
+            )
     return JSONResponse({"ok": True})
 
 
