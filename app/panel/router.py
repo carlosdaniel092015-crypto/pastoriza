@@ -41,7 +41,7 @@ from app.estado import (
     set_bot_global,
 )
 from app.logging_conf import get_logger
-from app.panel import conocimiento, events, prompt_store
+from app.panel import agentes_custom, conocimiento, events, prompt_store
 from app.panel.analista import analizar_y_sugerir
 from app.panel.ui import MANIFEST, PANEL_HTML, SERVICE_WORKER
 from app.redis_client import get_redis, with_reconnect
@@ -494,16 +494,20 @@ async def api_anuncios(x_panel_token: str | None = Header(default=None)) -> dict
 @panel_router.get("/api/prompts")
 async def api_prompts_get(x_panel_token: str | None = Header(default=None)) -> dict:
     _auth(x_panel_token)
+    todos = prompt_store.agentes()
     return {
-        "agentes": list(prompt_store.AGENTES),
+        "agentes": list(todos),
         "prompts": {
             a: {
                 "base": prompt_store.get_base(a),
                 "override": prompt_store.get_prompt(a) if prompt_store.usando_override(a) else "",
                 "usando_override": prompt_store.usando_override(a),
             }
-            for a in prompt_store.AGENTES
+            for a in todos
         },
+        # Agentes creados desde el panel (con sus herramientas y palabras clave).
+        "personalizados": agentes_custom.listar(),
+        "packs": agentes_custom.PACKS,
     }
 
 
@@ -512,7 +516,7 @@ async def api_prompt_set(
     agente: str, request: Request, x_panel_token: str | None = Header(default=None)
 ) -> dict:
     _auth(x_panel_token)
-    if agente not in prompt_store.AGENTES:
+    if agente not in prompt_store.agentes():
         raise HTTPException(status_code=404, detail=f"agente desconocido: {agente}")
     data = await request.json()
     texto = str(data.get("override", ""))
@@ -527,6 +531,61 @@ async def api_prompt_set(
         detalle=f"prompt '{agente}' {'guardado' if texto.strip() else 'restaurado al base'}",
     )
     return {"ok": True, "agente": agente, "usando_override": prompt_store.usando_override(agente)}
+
+
+# ------------------------------------------- agentes creados desde el panel ---
+@panel_router.post("/api/agentes")
+async def api_agente_crear(
+    request: Request, x_panel_token: str | None = Header(default=None)
+) -> dict:
+    """Crea (o actualiza) un agente PERSONALIZADO que de verdad atiende turnos.
+
+    Body: {nombre, descripcion, herramientas:[...], palabras:[...], modelo, prompt}
+    El prompt se guarda con prompt_store (igual que los agentes base), así que se
+    puede editar o subir un .md después desde la misma pantalla.
+    """
+    _auth(x_panel_token)
+    data = await request.json()
+    nombre = str(data.get("nombre", "")).strip().lower()
+    prompt = str(data.get("prompt", "") or "")
+    herramientas = data.get("herramientas") or []
+    palabras = data.get("palabras") or []
+    if isinstance(palabras, str):
+        palabras = [p for p in palabras.split(",")]
+    if len(prompt.strip()) < 40:
+        raise HTTPException(
+            status_code=400,
+            detail="El prompt del agente debe tener al menos 40 caracteres: es lo que "
+                   "define cómo se comporta.",
+        )
+    try:
+        cfg = await agentes_custom.guardar(
+            nombre=nombre,
+            descripcion=str(data.get("descripcion", "")),
+            herramientas=list(herramientas),
+            palabras=list(palabras),
+            modelo=str(data.get("modelo", "mini")),
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    await prompt_store.guardar(nombre, prompt)
+    await events.publicar(
+        "control", "-", detalle=f"agente '{nombre}' creado/actualizado desde el panel",
+    )
+    return {"ok": True, "agente": cfg}
+
+
+@panel_router.delete("/api/agentes/{nombre}")
+async def api_agente_borrar(
+    nombre: str, x_panel_token: str | None = Header(default=None)
+) -> dict:
+    _auth(x_panel_token)
+    ok = await agentes_custom.borrar(nombre)
+    if not ok:
+        raise HTTPException(status_code=404, detail=f"no existe el agente '{nombre}'")
+    await events.publicar("control", "-", detalle=f"agente '{nombre}' eliminado")
+    return {"ok": True}
 
 
 # ------------------------------------------------------------ revisión ---

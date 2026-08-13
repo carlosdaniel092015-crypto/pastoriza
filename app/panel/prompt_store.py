@@ -24,6 +24,17 @@ log = get_logger(__name__)
 AGENTES = ("base_comun", "ventas", "pedido", "soporte", "enrutador")
 PROMPTS_DIR = Path(__file__).resolve().parents[2] / "prompts"
 
+
+def agentes() -> tuple[str, ...]:
+    """Agentes editables: los base + los PERSONALIZADOS creados desde el panel.
+
+    Los personalizados no tienen `.md` base (su prompt vive sólo como override),
+    así que `get_base` devuelve "" para ellos y el panel muestra el editor vacío.
+    """
+    from app.panel import agentes_custom
+
+    return AGENTES + tuple(n for n in agentes_custom.nombres() if n not in AGENTES)
+
 # Caches de proceso.
 _base: dict[str, str] = {}
 _override: dict[str, str | None] = {}
@@ -62,8 +73,9 @@ def usando_override(agente: str) -> bool:
 async def cargar() -> None:
     """Carga los .md base y los overrides de Redis. Llamar al arrancar."""
     global _cargado
-    for agente in AGENTES:
-        _base[agente] = _leer_md(agente)
+    for agente in agentes():
+        # Los personalizados no tienen .md: su prompt es sólo el override.
+        _base[agente] = _leer_md(agente) if agente in AGENTES else ""
 
         async def _op(r: Any, a: str = agente) -> str | None:
             return await r.get(_key(a))
@@ -78,7 +90,7 @@ async def cargar() -> None:
 
 async def guardar(agente: str, texto: str) -> None:
     """Guarda/borra el override de un agente y actualiza el cache al instante."""
-    if agente not in AGENTES:
+    if agente not in agentes():
         raise ValueError(f"agente inválido: {agente}")
     texto = (texto or "").strip()
 

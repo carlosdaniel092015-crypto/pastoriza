@@ -6,7 +6,9 @@ ventas / pedido / soporte.
 """
 from __future__ import annotations
 
+import json
 import re
+from dataclasses import dataclass
 
 from openai import AsyncOpenAI
 
@@ -43,8 +45,65 @@ RE_VENTAS = re.compile(
 )
 
 
+# ---------------------------------------------------------- determinador ---
+# Señales EXPLÍCITAS de que el caso SÍ amerita una persona. Son deterministas
+# (0 tokens) y habilitan la escalada; sin una de estas (o sin el visto bueno del
+# determinador con IA), `escalar_a_humano` queda BLOQUEADA.
+RE_PIDE_HUMANO = re.compile(
+    r"(hablar con (una |un )?(persona|humano|asesor|encargado|supervisor|alguien|"
+    r"representante|vendedor)|(una|un) (persona|humano|asesor) real|"
+    r"pasame con|comunicame con|quiero hablar con)"
+)
+RE_AMERITA_HUMANO = re.compile(
+    r"\b(cancel|anul|reembols|devol|queja|reclam|estaf|fraude|denunc|abogad|"
+    r"demand|molest|enojad|furios|indignad|pesim|horrible|malisim|robo|robaron|"
+    r"enganaron|enganad|quit|elimin|no me llego|no ha llegado|llego roto|"
+    r"llego dana|defectuos|mal estado)"
+)
+
+
+@dataclass
+class Veredicto:
+    """Salida del determinador: a quién va el turno y si puede escalar a un humano."""
+
+    agente: str
+    permite_escalar: bool
+    motivo: str = ""
+
+
 def _norm(texto: str) -> str:
     return quitar_tildes(str(texto or "")).lower().strip()
+
+
+def senales_humano(texto: str) -> bool:
+    """True si el TEXTO trae una señal explícita de que amerita una persona."""
+    n = _norm(texto)
+    return bool(RE_PIDE_HUMANO.search(n) or RE_AMERITA_HUMANO.search(n))
+
+
+def ruta_personalizada(texto: str) -> str | None:
+    """Enrutado a un agente PERSONALIZADO por sus palabras clave (0 tokens).
+
+    Se consulta DESPUÉS de reclamos/cancelaciones (esas mandan a soporte siempre) y
+    ANTES de las reglas genéricas de ventas/pedido, para que un agente creado en el
+    panel pueda capturar su nicho (ej. "al por mayor" -> agente mayorista).
+    """
+    from app.panel import agentes_custom
+
+    n = _norm(texto)
+    if not n:
+        return None
+    mejor: tuple[int, str] | None = None
+    for cfg in agentes_custom.listar():
+        if not cfg.get("activo", True):
+            continue
+        for palabra in cfg.get("palabras", []):
+            p = _norm(palabra)
+            if p and p in n:
+                # Gana la coincidencia más específica (la palabra más larga).
+                if mejor is None or len(p) > mejor[0]:
+                    mejor = (len(p), str(cfg["nombre"]))
+    return mejor[1] if mejor else None
 
 
 def ruta_deterministica(
@@ -63,6 +122,10 @@ def ruta_deterministica(
     # 2. Reclamo/cancelación gana sobre todo.
     if RE_SOPORTE.search(n):
         return "soporte"
+    # 2b. Agentes PERSONALIZADOS del panel: capturan su nicho por palabras clave.
+    custom = ruta_personalizada(n)
+    if custom:
+        return custom
     # 3. Señales claras de cierre -> pedido.
     if RE_CIERRE.search(n):
         return "pedido"
@@ -74,18 +137,52 @@ def ruta_deterministica(
 
 async def elegir_agente(texto: str, ctx, session=None) -> str:
     """Devuelve 'ventas' | 'pedido' | 'soporte'."""
+    v = await analizar_contexto(texto, ctx, session)
+    return v.agente
+
+
+async def analizar_contexto(texto: str, ctx, session=None) -> Veredicto:
+    """DETERMINADOR: decide el especialista Y si el caso amerita una persona.
+
+    Corre ANTES del enrutado y es lo que habilita (o no) `escalar_a_humano`. Existe
+    porque el modelo llegaba a escalar cosas que debe resolver él —incluso un
+    SALUDO—: ahora la escalada necesita una señal explícita del cliente o el visto
+    bueno de este análisis, que sí mira el CONTEXTO de la conversación.
+
+    Determinista primero (0 tokens); el modelo mini sólo entra ante duda, y en ese
+    caso resuelve agente + escalada en UNA sola llamada (la que ya se hacía).
+    """
+    explicito = senales_humano(texto)
     ruta = ruta_deterministica(
         texto,
         es_comprobante=bool(getattr(ctx, "es_comprobante", False)),
         tiene_imagen=bool(getattr(ctx, "imagen_url", "")),
     )
     if ruta:
-        return ruta
-    # Ambiguo -> clasificador mini con contexto reciente.
-    return await _clasificar(texto, session)
+        return Veredicto(
+            agente=ruta,
+            permite_escalar=explicito,
+            motivo="senal_explicita" if explicito else "ruta_deterministica",
+        )
+    if explicito:
+        # Pide una persona / reclamo claro, pero la ruta no era obvia: a soporte.
+        return Veredicto(agente="soporte", permite_escalar=True, motivo="senal_explicita")
+    # Ambiguo -> el determinador con IA mira la conversación reciente.
+    return await _determinar(texto, session)
 
 
-async def _clasificar(texto: str, session=None) -> str:
+INSTR_DETERMINADOR = """Además de elegir el agente, decide si el caso amerita una PERSONA.
+amerita_humano = true SOLO si: el cliente pide explícitamente hablar con alguien, quiere
+cancelar/quitar algo de un pedido, hay una queja seria o real (producto dañado, no llegó,
+cobro mal), o hay insultos/abuso.
+amerita_humano = false para TODO lo normal: saludos, cortesías ("hola", "buenas tardes,
+cómo estás", "ok", "gracias"), preguntas de precio, medidas, envío, ubicación, pago,
+disponibilidad, fotos y pedidos. Eso lo resuelve el bot.
+Responde SOLO este JSON: {"agente":"ventas|pedido|soporte","amerita_humano":true|false,"motivo":"3 palabras"}"""
+
+
+async def _determinar(texto: str, session=None) -> Veredicto:
+    """Determinador con IA: agente + si amerita humano, mirando la conversación."""
     from app.panel.prompt_store import get_prompt
 
     contexto = ""
@@ -98,26 +195,52 @@ async def _clasificar(texto: str, session=None) -> str:
         except Exception:  # noqa: BLE001
             contexto = ""
 
+    # Los agentes creados desde el panel también son destinos válidos: se los
+    # describimos al determinador para que pueda elegirlos cuando corresponda.
+    from app.panel import agentes_custom
+
+    extra = ""
+    validos = set(VALIDOS)
+    customs = [c for c in agentes_custom.listar() if c.get("activo", True)]
+    if customs:
+        extra = "\nAgentes adicionales disponibles:\n" + "\n".join(
+            f'- {c["nombre"]}: {c.get("descripcion") or "sin descripcion"}'
+            for c in customs
+        )
+        validos |= {str(c["nombre"]) for c in customs}
+
     try:
         resp = await _openai.chat.completions.create(
             model=settings.model_mini,
-            max_tokens=4,
+            max_tokens=60,
             temperature=0,
+            response_format={"type": "json_object"},
             messages=[
-                {"role": "system", "content": get_prompt("enrutador")},
+                {
+                    "role": "system",
+                    "content": (
+                        get_prompt("enrutador") + "\n\n" + INSTR_DETERMINADOR + extra
+                    ),
+                },
                 {
                     "role": "user",
                     "content": (
                         f"Conversación reciente:\n{contexto}\n\n"
-                        f"Mensaje nuevo del cliente: {texto}\n\nAgente:"
+                        f"Mensaje nuevo del cliente: {texto}\n\nJSON:"
                     ),
                 },
             ],
         )
-        out = (resp.choices[0].message.content or "").strip().lower()
-        for a in ("pedido", "soporte", "ventas"):  # pedido/soporte antes que ventas
-            if a in out:
-                return a
+        data = json.loads(resp.choices[0].message.content or "{}")
+        agente = str(data.get("agente", "")).strip().lower()
+        if agente not in validos:
+            # El modelo pudo responder con texto libre: buscamos el nombre dentro.
+            agente = next((a for a in ("pedido", "soporte", "ventas") if a in agente), "ventas")
+        permite = bool(data.get("amerita_humano") is True)
+        motivo = str(data.get("motivo", ""))[:60]
+        log.info("determinador", agente=agente, permite_escalar=permite, motivo=motivo)
+        return Veredicto(agente=agente, permite_escalar=permite, motivo=motivo or "ia")
     except Exception as exc:  # noqa: BLE001
-        log.warning("enrutador_llm_fallo", error=str(exc))
-    return "ventas"  # default seguro
+        log.warning("determinador_fallo", error=str(exc))
+    # Default seguro: ventas y SIN permiso de escalar (el bot atiende).
+    return Veredicto(agente="ventas", permite_escalar=False, motivo="fallback")

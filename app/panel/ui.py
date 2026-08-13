@@ -386,6 +386,24 @@ PANEL_HTML = r"""<!doctype html>
             <button class="btn" onclick="savePrompt()">Guardar</button>
           </div>
           <div class="stbar"><span class="d" id="pdot"></span><b id="pstate"></b><span class="meta" id="pmsg"></span></div>
+          <div class="group" style="margin:12px 0">
+            <h3>Crear o mapear un agente</h3>
+            <div class="gsub">Un agente necesita prompt + herramientas + cuándo se activa. Al guardarlo queda atendiendo de verdad.</div>
+            <div class="grid">
+              <div class="fld"><label>Nombre (a-z, _)</label><input id="ag_nombre" placeholder="mayorista"/><span class="hint">Identificador corto, sin espacios.</span></div>
+              <div class="fld"><label>Modelo</label><select id="ag_modelo" style="background:var(--bg);border:1px solid var(--line);color:var(--tx);padding:8px 10px;border-radius:var(--r)"><option value="mini">mini (barato, recomendado)</option><option value="agente">gpt-4o (para lo delicado)</option></select></div>
+              <div class="fld" style="grid-column:1/-1"><label>¿Para qué sirve?</label><input id="ag_desc" placeholder="Atiende compras al por mayor y precios por volumen"/><span class="hint">Se lo pasamos al determinador para que sepa cuándo enrutarle.</span></div>
+              <div class="fld" style="grid-column:1/-1"><label>Se activa cuando el cliente dice (separá con comas)</label><input id="ag_palabras" placeholder="al por mayor, mayorista, por fardo"/><span class="hint">Enrutado directo, sin gastar tokens.</span></div>
+              <div class="fld" style="grid-column:1/-1"><label>Herramientas</label><div id="ag_packs" class="meta">—</div></div>
+              <div class="fld" style="grid-column:1/-1"><label>Prompt del agente (mínimo 40 caracteres)</label><textarea id="ag_prompt" style="min-height:110px" placeholder="Eres Michelle y atiendes clientes al por mayor..."></textarea></div>
+            </div>
+            <div class="filters" style="margin-top:10px">
+              <label class="btn sec" style="cursor:pointer">Subir .md<input type="file" accept=".md,.txt,text/markdown" style="display:none" onchange="subirMdAgente(event)"/></label>
+              <button class="btn" onclick="crearAgente()">Crear agente</button>
+              <span class="meta" id="ag_msg"></span>
+            </div>
+            <div id="ag_lista" class="meta" style="margin-top:10px">—</div>
+          </div>
           <div class="promptcols">
             <div>
               <div class="eyebrow" style="margin-bottom:6px">Override editable</div>
@@ -648,8 +666,43 @@ function cfgTouch(){ cfgDirty++; $('#cfgmsg').innerHTML='<span class="warn">'+cf
 async function saveCfg(){ const data={}; document.querySelectorAll('[id^=cfg_]').forEach(i=>data[i.id.slice(4)]=i.value); await api('/config',{method:'POST',body:JSON.stringify(data)}); cfgDirty=0; $('#cfgmsg').innerHTML='<span class="ok">Guardado ✓</span>'; }
 
 // prompt
-let PROMPTS={};
-async function loadPrompt(){ const d=await api('/prompts'); PROMPTS=d.prompts||{}; const sel=$('#pagente'); if(!sel.options.length)sel.innerHTML=(d.agentes||[]).map(a=>`<option value="${a}">${a}</option>`).join(''); mostrarPrompt(); }
+let PROMPTS={}, PACKS_AG={}, AGENTES_CUSTOM=[];
+async function loadPrompt(){ const d=await api('/prompts'); PROMPTS=d.prompts||{};
+  PACKS_AG=d.packs||{}; AGENTES_CUSTOM=d.personalizados||[];
+  const sel=$('#pagente'); const prev=sel.value;
+  sel.innerHTML=(d.agentes||[]).map(a=>{const cst=AGENTES_CUSTOM.some(c=>c.nombre===a);
+    return `<option value="${a}">${a}${cst?' (creado)':''}</option>`;}).join('');
+  if(prev)sel.value=prev;
+  pintarPacks(); pintarAgentes(); mostrarPrompt(); }
+function pintarPacks(){ const el=$('#ag_packs'); if(!el)return;
+  el.innerHTML=Object.keys(PACKS_AG).length?Object.entries(PACKS_AG).map(([k,v])=>
+    `<label style="display:block;margin:3px 0"><input type="checkbox" class="agpack" value="${k}"/> <b>${esc(k)}</b> — ${esc(v)}</label>`).join('')
+    :'<span class="empty">—</span>'; }
+function pintarAgentes(){ const el=$('#ag_lista'); if(!el)return;
+  el.innerHTML=AGENTES_CUSTOM.length?AGENTES_CUSTOM.map(a=>
+    `<div class="rrow"><span class="rt"><b>${esc(a.nombre)}</b> — ${esc(a.descripcion||'sin descripción')}<br>
+      <span class="meta">activa con: ${esc((a.palabras||[]).join(', ')||'(sólo por IA)')} · herramientas: ${esc((a.herramientas||[]).join(', ')||'ninguna')} · ${esc(a.modelo||'mini')}</span></span>
+      <button class="rx" title="Eliminar" onclick="borrarAgente('${esc(a.nombre)}')">×</button></div>`).join('')
+    :'<div class="empty">Todavía no creaste agentes. Los base (ventas, pedido, soporte) siguen funcionando.</div>'; }
+function subirMdAgente(ev){ const f=ev.target.files[0]; ev.target.value=''; if(!f)return;
+  const rd=new FileReader(); rd.onload=()=>{ $('#ag_prompt').value=rd.result; $('#ag_msg').innerHTML='<span class="meta">Archivo cargado; completá el nombre y dale Crear.</span>'; }; rd.readAsText(f); }
+async function crearAgente(){
+  const nombre=($('#ag_nombre').value||'').trim().toLowerCase();
+  const prompt=$('#ag_prompt').value||'';
+  const herramientas=[...document.querySelectorAll('.agpack:checked')].map(c=>c.value);
+  const palabras=($('#ag_palabras').value||'').split(',').map(s=>s.trim()).filter(Boolean);
+  const body={nombre,descripcion:$('#ag_desc').value||'',herramientas,palabras,modelo:$('#ag_modelo').value,prompt};
+  try{ const r=await fetch('/panel/api/agentes',{method:'POST',headers:headers(),body:JSON.stringify(body)});
+    const d=await r.json().catch(()=>({}));
+    if(!r.ok){ $('#ag_msg').innerHTML='<span class="bad">'+esc(d.detail||('Error '+r.status))+'</span>'; return; }
+    $('#ag_msg').innerHTML='<span class="ok">Agente "'+esc(nombre)+'" creado ✓ ya atiende conversaciones</span>';
+    $('#ag_nombre').value='';$('#ag_desc').value='';$('#ag_palabras').value='';$('#ag_prompt').value='';
+    document.querySelectorAll('.agpack:checked').forEach(c=>c.checked=false);
+    await loadPrompt();
+  }catch(e){ $('#ag_msg').innerHTML='<span class="bad">Error: '+esc(String(e))+'</span>'; } }
+async function borrarAgente(nombre){ if(!confirm('¿Eliminar el agente "'+nombre+'"? Sus conversaciones futuras las tomarán los agentes base.'))return;
+  try{ await api('/agentes/'+encodeURIComponent(nombre),{method:'DELETE'}); await loadPrompt(); }
+  catch(e){ alert('No se pudo eliminar: '+e); } }
 function mostrarPrompt(){ const a=$('#pagente').value,p=PROMPTS[a]||{}; $('#pov').value=p.override||''; $('#pbase').value=p.base||'';
   const ov=p.usando_override; $('#pdot').className='d'+(ov?'':' base');
   $('#pstate').textContent=ov?('Usando override · '+((p.override||'').length)+' caracteres'):'Usando prompt base'; $('#pmsg').textContent='';
