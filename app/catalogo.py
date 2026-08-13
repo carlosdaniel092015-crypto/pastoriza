@@ -69,10 +69,16 @@ class Catalogo:
             if settings.website_pricelist_id > 0
             else {}
         )
+        # OJO: pedir un campo que este Odoo no tenga hace fallar TODO el search_read
+        # (y deja el catálogo vacío). `qty_available` sólo se pide si el filtro de
+        # stock está activo; sin él, no se pide y no puede romper la carga.
+        campos = ["id", "name", "list_price", "is_published", "image_128"]
+        if settings.solo_con_stock:
+            campos.append("qty_available")
         tmpls = await odoo.search_read(
             "product.template",
             [["active", "=", True]],
-            ["id", "name", "list_price", "is_published", "image_128", "qty_available"],
+            campos,
             limit=500,
             order="name asc",
             context=ctx or None,
