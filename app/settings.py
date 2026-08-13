@@ -91,6 +91,15 @@ class Settings(BaseSettings):
     # Telegram para alertas de error (opcional). Si faltan, no notifica por Telegram.
     telegram_bot_token: str = ""
     telegram_chat_id: str = ""
+    # Secreto para validar el webhook de Telegram (botones Aprobar/Rechazar). Telegram
+    # lo reenvía en el header X-Telegram-Bot-Api-Secret-Token. Vacío = no se registra
+    # el webhook ni se aceptan callbacks (los botones quedan inertes por seguridad).
+    telegram_webhook_secret: str = ""
+
+    # ---------- Analista de aprendizaje ----------
+    # Corrida automática del analista (propone reglas a partir de la cola de revisión).
+    analista_auto: bool = True
+    analista_intervalo_horas: int = 24  # cada cuánto corre el análisis
 
     # ---------- Migración gradual ----------
     # Si tiene contenido, SOLO estos números se procesan acá (el resto lo ignora

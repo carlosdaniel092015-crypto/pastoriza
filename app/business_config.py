@@ -57,6 +57,10 @@ class BusinessConfig:
     )
     # Pago y mínimos
     monto_minimo: str = "1000"  # pedido mínimo en RD$
+    # Mínimo de UNIDADES para envío a domicilio, por tamaño (editable en el panel).
+    minimo_envio: str = (
+        "4, 8 y 12 oz: desde 300 unidades. 16 oz: desde 200 unidades. Fardos: desde 1."
+    )
     formas_pago: str = "Tarjetas de credito, transferencia, depositos y pago en efectivo"
     contra_entrega: str = "No"  # ¿se acepta pago contra entrega? No
     # Venta por fardo (OPCIONAL: dejar vacío hasta que el cliente confirme los datos)

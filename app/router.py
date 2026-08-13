@@ -114,9 +114,14 @@ def respuesta_directa(
         )
 
     if RE_ENVIO_RETIRO.match(norm) or RE_ENVIO.search(norm):
-        return (
+        envio = (
             f"Envio a domicilio\n"
-            f"Costo: RD${cfg.precio_envio}. Dias: {cfg.dias_envio}. {cfg.nota_envio}.\n\n"
+            f"Costo: RD${cfg.precio_envio}. Dias: {cfg.dias_envio}. {cfg.nota_envio}."
+        )
+        if getattr(cfg, "minimo_envio", ""):
+            envio += f"\nMinimo para envio: {cfg.minimo_envio}"
+        return (
+            f"{envio}\n\n"
             f"Retiro en tienda (gratis)\n{cfg.direccion}\n"
             f"Horario: {cfg.horario_tienda}\n\nCual prefieres?"
         )
@@ -133,10 +138,13 @@ def respuesta_directa(
         )
 
     if RE_DIRECCION.search(norm):
-        return (
+        base = (
             f"Estamos en {cfg.direccion}. Horario: {cfg.horario_tienda}. "
-            f"Tel: {cfg.telefono}. Si buscas en Google Maps te lleva directo."
+            f"Tel: {cfg.telefono}."
         )
+        if cfg.maps_url:
+            return f"{base}\n\nAqui te llega directo por Google Maps:\n{cfg.maps_url}"
+        return f"{base} Si buscas en Google Maps te lleva directo."
 
     if RE_HORARIO.search(norm):
         return f"Nuestro horario es {cfg.horario_tienda}. Estamos en {cfg.direccion}."
