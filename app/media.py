@@ -46,7 +46,9 @@ PROMPT_IMAGEN = """Eres el asistente de una empresa de envases plasticos. Analiz
 
 1) COMPROBANTE BANCARIO REAL (SOLO si ves banco + monto RD$ + referencia + fecha):
 COMPROBANTE_PAGO: [banco, monto y referencia]
-Si no ves esos datos, NO uses COMPROBANTE_PAGO.
+Si no ves esos datos, NO escribas la palabra COMPROBANTE_PAGO en NINGUN caso: ni
+siquiera para decir que no hay, ni como "COMPROBANTE_PAGO: [no hay datos]". Omite
+el bloque por completo y pasa al que corresponda.
 
 2) SELECCION_PRODUCTO: [numero] [nombre]
 
@@ -183,12 +185,39 @@ async def _vision(prompt: str, data: bytes, mime: str, max_tokens: int = 400) ->
     return (resp.choices[0].message.content or "").strip()
 
 
+# El modelo de visión a veces ESCRIBE la etiqueta para decir que NO hay comprobante
+# ("1) COMPROBANTE_PAGO: [no hay datos]"). Buscar el literal daba un falso positivo:
+# tomaba la foto de unos envases como comprobante, avisaba al admin de un "pago sin
+# pedido" y mandaba el turno al agente de PEDIDO en vez de al de ventas.
+_RE_COMPROBANTE = re.compile(r"COMPROBANTE_PAGO\s*:?\s*(.*)", re.IGNORECASE)
+_SIN_COMPROBANTE = (
+    "no hay", "no aplica", "ninguno", "sin datos", "no se ve", "no corresponde",
+    "no es", "no visible", "n/a", "none", "null", "no data", "vacio", "no detect",
+)
+
+
+def es_comprobante_de(texto: str) -> bool:
+    """True SÓLO si el análisis trae datos REALES de un pago. Pura y testeable."""
+    m = _RE_COMPROBANTE.search(texto or "")
+    if not m:
+        return False
+    # Nos quedamos con esa línea/bloque (hasta el siguiente punto numerado).
+    detalle = re.split(r"\n\s*\d\s*\)", m.group(1))[0]
+    detalle = detalle.strip().strip("[]()").strip(" .:-").lower()
+    if not detalle:
+        return False
+    if any(neg in detalle for neg in _SIN_COMPROBANTE):
+        return False
+    # Un comprobante real trae monto/referencia/fecha: sin ningún número, no lo es.
+    return bool(re.search(r"\d", detalle))
+
+
 async def analizar_imagen(url: str) -> tuple[str, bool]:
     """Devuelve (descripción, es_comprobante)."""
     try:
         data = await descargar(url)
         texto = await _vision(PROMPT_IMAGEN, data, mime_de_url(url))
-        return texto, "COMPROBANTE_PAGO" in texto
+        return texto, es_comprobante_de(texto)
     except Exception as exc:  # noqa: BLE001
         log.error("analisis_imagen_fallo", error=str(exc))
         return "", False
