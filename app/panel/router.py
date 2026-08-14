@@ -55,6 +55,7 @@ from app.logging_conf import get_logger
 from app.panel import agentes_custom, conocimiento, events, prompt_store
 from app.panel.analista import analizar_y_sugerir
 from app.panel.ui import MANIFEST, PANEL_HTML, SERVICE_WORKER
+from app import score
 from app.redis_client import get_redis, with_reconnect
 from app.session import RedisSession
 from app.settings import settings
@@ -285,7 +286,8 @@ async def api_chats(x_panel_token: str | None = Header(default=None)) -> dict:
     # conversaciones todavía: si no, un número nuevo no se vería hasta el primer
     # cliente y no habría dónde configurarlo.
     resumen: dict[str, dict] = {
-        num: {"canal": num, "nombre": nombre, "total": 0, "esperando": 0, "en_asesor": 0}
+        num: {"canal": num, "nombre": nombre, "total": 0, "esperando": 0,
+              "en_asesor": 0, "por_cerrar": 0}
         for num, nombre in mapa_canales.items()
     }
     # UNA sola ida a Redis para saber qué chats están en control humano (antes era
@@ -317,6 +319,11 @@ async def api_chats(x_panel_token: str | None = Header(default=None)) -> dict:
             "ultimo_de": ultimo_de or "cliente",
             "ultimo_ts": m.get("ultimo_ts", 0),
             "pausado": cid in en_pausa,
+            # Semáforo de cierre: ya viene calculado en el chatmeta (0 costo acá).
+            # `sem` vacío = todavía no se le calculó nada: NO es "frío", es sin datos.
+            "score": m.get("score"),
+            "sem": m.get("score_sem", "") or "",
+            "hitos": score.etiquetas(m.get("score_hitos")),
             "canal": canal,
             "canal_nombre": (
                 "Sin canal" if canal == SIN_CANAL else nombre_canal(emisor, mapa_canales)
@@ -340,9 +347,11 @@ async def api_chats(x_panel_token: str | None = Header(default=None)) -> dict:
         r = resumen.setdefault(
             c["canal"],
             {"canal": c["canal"], "nombre": c["canal_nombre"],
-             "total": 0, "esperando": 0, "en_asesor": 0},
+             "total": 0, "esperando": 0, "en_asesor": 0, "por_cerrar": 0},
         )
         r["total"] += 1
+        if c["sem"] == "verde":
+            r["por_cerrar"] += 1
         if c["pausado"]:
             r["en_asesor"] += 1
         elif c["ultimo_de"] == "cliente":

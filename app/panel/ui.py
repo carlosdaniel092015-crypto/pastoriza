@@ -137,6 +137,19 @@ PANEL_HTML = r"""<!doctype html>
   .propio.ambos{border-color:var(--line);color:var(--mut)}
   .fld.esprop label:after{content:'· propio de este número';font-size:9.5px;color:var(--senal);
     margin-left:6px;letter-spacing:.04em;text-transform:none}
+  /* SEMAFORO DE CIERRE. Ojo: no hay color de "malo". Gris = sin senales todavia, que
+     NO es lo mismo que un cliente que no compra. */
+  .sem{width:8px;height:8px;border-radius:50%;flex:none;display:inline-block;background:var(--line)}
+  .sem.verde{background:#3FB950;box-shadow:0 0 6px rgba(63,185,80,.5)}
+  .sem.amarillo{background:var(--cinta)}
+  .sem.cerrado{background:var(--senal);border-radius:2px}
+  .sem.gris{background:var(--line)}
+  .hitos{display:flex;gap:4px;flex-wrap:wrap;margin-top:4px}
+  .hito{font-size:9.5px;font-family:var(--mono);color:var(--mut);border:1px solid var(--line);
+    border-radius:3px;padding:1px 5px}
+  .ordbtn{background:transparent;border:1px solid var(--line);color:var(--mut);border-radius:4px;
+    font-size:10px;font-family:var(--mono);padding:2px 6px;cursor:pointer;margin-left:6px}
+  .ordbtn.on{color:var(--senal);border-color:var(--senal)}
   .chat .cch{font-family:var(--mono);font-size:9.5px;color:var(--mut);border:1px solid var(--line);
     border-radius:4px;padding:0 4px;margin-left:5px;opacity:.85}
   /* Quién habló último en la conversación: sin esto no se sabía si el bot contestó. */
@@ -387,7 +400,7 @@ PANEL_HTML = r"""<!doctype html>
       <section class="view active" id="v-conv">
         <div class="conv">
           <div class="chats">
-            <div class="chdr"><span class="eyebrow">Conversaciones</span><span class="c mono" id="chcount">0</span><button class="col" title="Colapsar">‹</button></div>
+            <div class="chdr"><span class="eyebrow">Conversaciones</span><span class="c mono" id="chcount">0</span><button class="ordbtn" id="ordbtn" onclick="toggleOrden()" title="Ordenar por cercanía al cierre (quién está por comprar) en vez de por lo más reciente">↕ reciente</button><button class="col" title="Colapsar">‹</button></div>
             <div id="chats"><div class="empty">Cargando…</div></div>
           </div>
           <div class="thread">
@@ -643,15 +656,42 @@ function marcarComun(){
     }
   }
 }
+// Semáforo de cierre: SIEMPRE con el motivo. Un número o un color sin explicación se
+// vuelve un juicio sobre el cliente que nadie puede discutir.
+const TEXTO_SEM={verde:'Cerca de cerrar',amarillo:'Interesado',gris:'Sin señales todavía',cerrado:'Pedido creado y pagado'};
+function tituloSem(c){
+  const t=TEXTO_SEM[c.sem||'gris']||'Sin señales todavía';
+  const h=(c.hitos||[]).join(' · ');
+  return h?(t+': '+h):(t+' (todavía no hizo nada medible; no significa que no vaya a comprar)');
+}
 // Prefijo de quién habló último en la conversación (el cliente, el bot o un asesor).
 function quienDijo(de){
   if(de==='bot') return '<span class="quien bot">Bot:</span> ';
   if(de==='asesor') return '<span class="quien asesor">Asesor:</span> ';
   return '';
 }
+// Orden de atención. Por defecto RECIENTE (lo de siempre). "Por cierre" es sólo un
+// orden de la lista: no cambia en nada cómo atiende el bot.
+let orden=localStorage.getItem('panel_orden')||'reciente';
+const PRIO={verde:3,amarillo:2,gris:1,'':1,cerrado:0};
+function toggleOrden(){ orden=(orden==='reciente')?'cierre':'reciente';
+  localStorage.setItem('panel_orden',orden); _chatsSig=''; renderChats(); }
+function ordenarChats(lista){
+  if(orden!=='cierre') return lista;
+  return lista.slice().sort((a,b)=>{
+    // Primero el que escribió y nadie contestó: ahí hay alguien esperando.
+    const ea=(a.ultimo_de==='cliente'&&!a.pausado)?1:0, eb=(b.ultimo_de==='cliente'&&!b.pausado)?1:0;
+    if(ea!==eb) return eb-ea;
+    const pa=PRIO[a.sem||'']??1, pb=PRIO[b.sem||'']??1;
+    if(pa!==pb) return pb-pa;
+    if((b.score||0)!==(a.score||0)) return (b.score||0)-(a.score||0);
+    return (b.ultimo_ts||0)-(a.ultimo_ts||0);
+  });
+}
 function renderChats(){
-  const lista=chatsDelCanal();
-  const sig=JSON.stringify(lista.map(c=>[c.chat_id,c.ultimo,c.ultimo_de,c.ultimo_ts,c.pausado]))+'|'+selChat+'|'+canalSel+'|'+degradado;
+  const lista=ordenarChats(chatsDelCanal());
+  const sig=JSON.stringify(lista.map(c=>[c.chat_id,c.ultimo,c.ultimo_de,c.ultimo_ts,c.pausado,c.sem,c.score]))+'|'+selChat+'|'+canalSel+'|'+degradado+'|'+orden;
+  const ob=$('#ordbtn'); if(ob){ ob.textContent=(orden==='cierre')?'↕ por cierre':'↕ reciente'; ob.classList.toggle('on',orden==='cierre'); }
   if(sig===_chatsSig) return; _chatsSig=sig;
   $('#chcount').textContent=lista.length;
   const el=$('#chats');
@@ -672,8 +712,9 @@ function renderChats(){
     const tag=esTest(c.chat_id)?'<span class="ttag">PRUEBA</span>':'';
     // Con "Todos" se muestra de qué número entró; dentro de un canal sobra.
     const cch=(!canalSel&&c.canal_nombre)?`<span class="cch" title="Entró por ${esc(c.canal_nombre)}">${esc(c.canal_nombre)}</span>`:'';
+    const sem=c.sem?`<span class="sem ${c.sem}" title="${esc(tituloSem(c))}"></span>`:'';
     return `<button class="chat ${c.chat_id===selChat?'sel':''}" onclick="openChat('${c.chat_id}')">
-      <div class="top"><span class="n ${esNum(nombre)?'num':''}">${esc(nombre)}</span>${tag}<span class="h">${fmtRel(c.ultimo_ts)}</span>${dot}</div>
+      <div class="top">${sem}<span class="n ${esNum(nombre)?'num':''}">${esc(nombre)}</span>${tag}<span class="h">${fmtRel(c.ultimo_ts)}</span>${dot}</div>
       <div class="m">${quienDijo(c.ultimo_de)}${esc(c.ultimo)||'—'}${cch}</div></button>`;
   }).join('');
 }
@@ -703,7 +744,14 @@ async function openChat(id){
   const d=await api('/chats/'+encodeURIComponent(id)); const m=d.meta||{}; curItems=d.items||[];
   const canal=(m.telefono?'WhatsApp':'WhatsApp')+' · Santo Domingo';
   const hoy=new Date().toLocaleDateString('es-DO',{day:'2-digit',month:'long'}).toUpperCase();
-  $('#thead').innerHTML=`<div class="row1"><button class="backbtn" onclick="cerrarHilo()" title="Volver">‹</button><div><div class="cn">${esc(m.user_name)||esc(id)}</div><div class="cs">${esc(canal)}</div></div>
+  // El semáforo se muestra con su desglose: qué hizo este cliente, en sus términos.
+  const fila=chatsCache.find(c=>c.chat_id===id)||{};
+  const hitos=(fila.hitos||[]).map(h=>`<span class="hito">${esc(h)}</span>`).join('');
+  const semHtml=fila.sem
+    ? `<div class="cs" style="margin-top:5px"><span class="sem ${fila.sem}"></span> ${esc(TEXTO_SEM[fila.sem]||'')}${fila.score!=null?' · '+fila.score+'/100':''}</div>
+       ${hitos?`<div class="hitos">${hitos}</div>`:'<div class="cs" style="font-size:11px">Todavía no hizo nada medible. No significa que no vaya a comprar.</div>'}`
+    : '';
+  $('#thead').innerHTML=`<div class="row1"><button class="backbtn" onclick="cerrarHilo()" title="Volver">‹</button><div><div class="cn">${esc(m.user_name)||esc(id)}</div><div class="cs">${esc(canal)}</div>${semHtml}</div>
     <div class="date eyebrow">Hoy · ${hoy}</div></div>
     ${m.ad_id?`<div class="adbanner">📣 Vino del anuncio de Facebook${m.ad_producto?': '+esc(m.ad_producto):(m.ad_headline?': '+esc(m.ad_headline):'')} · ID ${esc(m.ad_id)}</div>`:''}
     <div class="acts">
