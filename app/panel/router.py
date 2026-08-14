@@ -182,6 +182,11 @@ _cache_scan: tuple[float, list[str]] | None = None
 # escribiendo del otro lado).
 _CONCURRENCIA = 6
 
+# Pestaña de las conversaciones que NO tienen número asignado (entraron antes de que
+# el bot guardara el emisor). Id propio: con "" se confundía con "Todos" y al hacerle
+# clic se veían todas las conversaciones.
+SIN_CANAL = "-"
+
 
 async def _chat_ids_de_sesiones() -> list[str]:
     global _cache_scan
@@ -299,8 +304,11 @@ async def api_chats(x_panel_token: str | None = Header(default=None)) -> dict:
             ultimo, ultimo_de = await _ultimo_del_historial(
                 cid, ultimo, version=float(m.get("ultimo_ts") or 0)
             )
-        # Canal = número NUESTRO por el que entró la conversación.
+        # Canal = número NUESTRO por el que entró la conversación. Las que entraron
+        # antes de que se guardara el emisor no tienen canal: van a SIN_CANAL, que es
+        # un id propio (no "" ) para no confundirse con la pestaña "Todos".
         emisor = str(m.get("emisor") or "")
+        canal = norm_num(emisor) or SIN_CANAL
         return {
             "chat_id": cid,
             "user_name": m.get("user_name", ""),
@@ -309,8 +317,10 @@ async def api_chats(x_panel_token: str | None = Header(default=None)) -> dict:
             "ultimo_de": ultimo_de or "cliente",
             "ultimo_ts": m.get("ultimo_ts", 0),
             "pausado": cid in en_pausa,
-            "canal": norm_num(emisor),
-            "canal_nombre": nombre_canal(emisor, mapa_canales),
+            "canal": canal,
+            "canal_nombre": (
+                "Sin canal" if canal == SIN_CANAL else nombre_canal(emisor, mapa_canales)
+            ),
         }
 
     # EN PARALELO PERO ACOTADO: lo que queda por chat (reconstruir el último mensaje
@@ -351,6 +361,45 @@ async def api_chats(x_panel_token: str | None = Header(default=None)) -> dict:
         # está vacía por FALLA, no porque no haya conversaciones.
         "degradado": degradado,
     }
+
+
+@panel_router.post("/api/chats/asignar-canal")
+async def api_asignar_canal(
+    canal: str = "", x_panel_token: str | None = Header(default=None)
+) -> dict:
+    """Manda a un número todas las conversaciones que quedaron SIN canal.
+
+    Las conversaciones que ya existían antes de que el bot guardara por qué número
+    entraron no se pueden atribuir solas (el dato no está en ninguna parte), y no se
+    adivina: lo decide quien opera, que sabe con qué número venía atendiendo. Desde
+    el próximo mensaje, cada conversación queda en su canal por sí sola.
+    """
+    _auth(x_panel_token)
+    c = canal_id(canal)
+    if not c:
+        raise HTTPException(status_code=400, detail="indicá a qué número asignarlas")
+
+    meta = await events.todos_chatmeta(estricto=True)
+    huerfanos = [cid for cid, m in meta.items() if not norm_num(str(m.get("emisor") or ""))]
+    for cid in huerfanos:
+        m = dict(meta[cid])
+        m["emisor"] = c
+        m.setdefault("destino", {"to": cid})
+        try:
+            await with_reconnect(
+                lambda r, k=cid, v=m: r.hset(
+                    events.CHATMETA_KEY, k, json.dumps(v, ensure_ascii=False)
+                )
+            )
+        except Exception as exc:  # noqa: BLE001
+            log.warning("asignar_canal_fallo", chat_id=cid, error=str(exc))
+
+    log.info("canal_asignado_a_huerfanos", canal=c, total=len(huerfanos))
+    await events.publicar(
+        "control", "-", emisor=c,
+        detalle=f"{len(huerfanos)} conversación(es) sin canal asignadas a {nombre_canal(c)}",
+    )
+    return {"ok": True, "asignadas": len(huerfanos), "canal": c}
 
 
 @panel_router.get("/api/chats/{chat_id}")
