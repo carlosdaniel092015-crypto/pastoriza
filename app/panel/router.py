@@ -411,6 +411,69 @@ async def api_asignar_canal(
     return {"ok": True, "asignadas": len(huerfanos), "canal": c}
 
 
+@panel_router.post("/api/chats/calcular-semaforo")
+async def api_calcular_semaforo(
+    canal: str = "",
+    rehacer: bool = False,
+    x_panel_token: str | None = Header(default=None),
+) -> dict:
+    """Calcula el semáforo de las conversaciones que YA existían, leyendo su historial.
+
+    El semáforo se calcula al cerrar cada turno, así que los chats anteriores no tienen
+    ninguno. Esto los pinta sin esperar a que el cliente vuelva a escribir. Se hace a
+    pedido (no en cada refresco) porque cuesta una lectura del historial POR chat, y el
+    resultado queda guardado: se paga una sola vez.
+
+    Sólo mira mensajes del cliente y SALIDAS DE TOOLS: si el modelo escribió "tu pedido
+    quedó registrado" sin que existiera, no cuenta como hito.
+    """
+    _auth(x_panel_token)
+    c = canal_id(canal)
+    meta = await events.todos_chatmeta(estricto=True)
+    minimo = _monto_minimo_de((await load_config(c)).monto_minimo)
+
+    # MISMO universo que la lista del panel: hay conversaciones que existen sólo como
+    # sesión, sin fila en el índice (las más viejas). Si se iteraran sólo las del
+    # índice, esas quedarían sin semáforo para siempre.
+    pendientes = []
+    for cid in set(meta.keys()) | set(await _chat_ids_de_sesiones()):
+        m = meta.get(cid, {})
+        if not rehacer and m.get("score") is not None:
+            continue
+        # Las que no tienen emisor no son de ningún número (pestaña "Sin canal"): sólo
+        # entran cuando se pide sin filtrar por canal.
+        if c and norm_num(str(m.get("emisor") or "")) != c:
+            continue
+        pendientes.append(cid)
+    limite = asyncio.Semaphore(_CONCURRENCIA)
+    hechos = {"calculadas": 0, "con_senales": 0}
+
+    async def _una(cid: str) -> None:
+        async with limite:
+            try:
+                items = await RedisSession(cid).get_items(limit=settings.session_max_items)
+                puntos = score.reconstruir(items, minimo)
+                if await events.guardar_score(
+                    cid, puntos["score"], puntos["sem"], puntos["hitos"]
+                ):
+                    hechos["calculadas"] += 1
+                    if puntos["hitos"]:
+                        hechos["con_senales"] += 1
+            except Exception as exc:  # noqa: BLE001
+                log.warning("semaforo_no_calculado", chat_id=cid, error=str(exc))
+
+    await asyncio.gather(*(_una(cid) for cid in pendientes))
+    log.info("semaforo_calculado", canal=c or "todos", **hechos)
+    return {"ok": True, "pendientes": len(pendientes), **hechos}
+
+
+def _monto_minimo_de(valor: Any) -> float:
+    try:
+        return float(str(valor).replace(",", ""))
+    except (TypeError, ValueError):
+        return 0.0
+
+
 @panel_router.get("/api/chats/{chat_id}")
 async def api_chat_hilo(
     chat_id: str, x_panel_token: str | None = Header(default=None)

@@ -177,6 +177,29 @@ async def tocar_chatmeta(
         log.warning("chatmeta_no_guardado", error=str(exc))
 
 
+async def guardar_score(
+    chat_id: str, score: int | None, sem: str, hitos: list[str]
+) -> bool:
+    """Escribe SÓLO el semáforo de un chat, sin tocar nada más.
+
+    No se usa `tocar_chatmeta` a propósito: esa función reescribe `ultimo` y pisa
+    `ultimo_ts` con la hora actual, así que recalcular el semáforo de las
+    conversaciones viejas las haría aparecer todas como "ahora" y reordenaría la lista.
+    """
+    meta = await leer_chatmeta(chat_id)
+    meta.update({"score": score, "score_sem": sem, "score_hitos": list(hitos or [])})
+
+    async def _op(r: Any) -> None:
+        await r.hset(CHATMETA_KEY, chat_id, json.dumps(meta, ensure_ascii=False))
+
+    try:
+        await with_reconnect(_op)
+        return True
+    except Exception as exc:  # noqa: BLE001
+        log.warning("score_no_guardado", chat_id=chat_id, error=str(exc))
+        return False
+
+
 async def leer_chatmeta(chat_id: str) -> dict:
     async def _op(r: Any) -> str | None:
         return await r.hget(CHATMETA_KEY, chat_id)

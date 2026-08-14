@@ -236,3 +236,110 @@ async def test_un_chat_nuevo_no_tiene_semaforo_todavia(monkeypatch):
     meta = await events.leer_chatmeta("18093334444")
     assert meta.get("score") is None
     assert meta.get("score_sem") == ""
+
+
+# ------------------------------------------- reconstruir desde el historial ---
+# Las conversaciones que ya existían no tienen semáforo. Esto lo deduce del historial,
+# y lo delicado es de DÓNDE lo deduce: sólo mensajes del cliente y salidas de TOOLS.
+# Lo que el modelo redactó no cuenta, o volveríamos a confiar en el texto del modelo
+# (justo lo que el proyecto evita por diseño).
+def _out(texto: str) -> dict:
+    return {"type": "function_call_output", "output": texto}
+
+
+COTIZACION = (
+    "COTIZACION (para mostrar al cliente):\n"
+    "Cantidad: 300\nPrecio unitario (ITBIS incluido): RD$5.87\n"
+    "Envio: RD$550.00\nTOTAL: RD$2311.00"
+)
+
+
+class TestReconstruirDesdeHistorial:
+    def test_conversacion_avanzada(self):
+        p = score.reconstruir(
+            [
+                {"role": "user", "content": "hola, precio de botella de 8 oz"},
+                _out(COTIZACION),
+                {"role": "user", "content": "a que cuenta deposito?"},
+                _out("EXISTE: partner_id=42 | Clarys | dir: calle 5"),
+            ],
+            monto_minimo=1000.0,
+        )
+        assert set(p["hitos"]) == {
+            "cotizo", "sobre_minimo", "eligio_entrega", "pidio_cuentas", "contacto"
+        }
+        assert p["sem"] == "verde"
+
+    def test_no_le_cree_al_modelo_cuando_dice_que_creo_un_pedido(self):
+        """Regresión del invariante: el pedido lo declara la TOOL, no el modelo."""
+        p = score.reconstruir(
+            [
+                {"role": "user", "content": "quiero 300 botellas"},
+                {"role": "assistant",
+                 "content": "Listo, tu pedido quedó registrado con el número 999."},
+            ]
+        )
+        assert "pedido" not in p["hitos"]
+
+    def test_si_la_tool_creo_el_pedido_si_cuenta(self):
+        p = score.reconstruir([
+            _out("OK: pedido creado con número 1234. Ahora agrega las líneas"),
+            _out("OK: 300 x BOTELLA LISA 8 OZ a RD$5.87 = RD$1761.00 agregado al pedido 1234."),
+        ])
+        assert {"pedido", "lineas"} <= set(p["hitos"])
+
+    def test_contacto_creado_o_actualizado(self):
+        assert "contacto" in score.reconstruir(
+            [_out("OK: contacto creado, partner_id=77")]
+        )["hitos"]
+        assert "contacto" in score.reconstruir(
+            [_out("OK: contacto 77 actualizado (street, phone).")]
+        )["hitos"]
+
+    def test_cliente_no_registrado_no_cuenta(self):
+        p = score.reconstruir([_out("NO_EXISTE: el cliente no está registrado.")])
+        assert p["hitos"] == [] and p["sem"] == "gris"
+
+    def test_comprobante_detectado_en_el_analisis_de_la_imagen(self):
+        """El turno del cliente trae el bloque de visión: de ahí sale el comprobante."""
+        p = score.reconstruir([{
+            "role": "user",
+            # Formato REAL del análisis de visión (ver tests/test_comprobante.py).
+            "content": ("# EL CLIENTE ENVIO UNA IMAGEN\n## ANALISIS VISUAL:\n"
+                        "1) COMPROBANTE_PAGO: [Banco Popular, RD$2,311.00, ref 998877, "
+                        "14/08/2026]\n\n2) SELECCION_PRODUCTO: [8 oz]"),
+        }])
+        assert "comprobante" in p["hitos"]
+
+    def test_una_foto_de_envases_no_es_comprobante(self):
+        p = score.reconstruir([{
+            "role": "user",
+            "content": ("# EL CLIENTE ENVIO UNA IMAGEN\n## ANALISIS VISUAL:\n"
+                        "1) COMPROBANTE_PAGO: [no hay datos]\n\n"
+                        "2) SELECCION_PRODUCTO: [16 oz, 12 oz]\n\n"
+                        "3) FOTO de envase: TIPO_ENVASE: Botella / CAPACIDAD: 8 oz"),
+        }])
+        assert "comprobante" not in p["hitos"]
+
+    def test_cotizacion_por_debajo_del_minimo(self):
+        p = score.reconstruir([_out(COTIZACION)], monto_minimo=99999.0)
+        assert "cotizo" in p["hitos"] and "sobre_minimo" not in p["hitos"]
+
+    def test_toma_la_cotizacion_mas_alta(self):
+        chico = COTIZACION.replace("TOTAL: RD$2311.00", "TOTAL: RD$300.00")
+        p = score.reconstruir([_out(chico), _out(COTIZACION)], monto_minimo=1000.0)
+        assert "sobre_minimo" in p["hitos"]
+
+    def test_historial_raro_no_revienta(self):
+        for items in (None, [], [None], ["texto suelto"], [{}],
+                      [{"role": "user", "content": None}],
+                      [{"role": "user", "content": [{"text": "a que cuenta deposito"}]}],
+                      [_out("COTIZACION (para mostrar al cliente):\nTOTAL: RD$")]):
+            p = score.reconstruir(items, 1000.0)
+            assert set(p) == {"score", "sem", "hitos"}
+
+    def test_contenido_en_lista_tambien_se_lee(self):
+        p = score.reconstruir(
+            [{"role": "user", "content": [{"text": "ya te transferi el pago"}]}]
+        )
+        assert "dijo_pago" in p["hitos"]
