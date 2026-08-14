@@ -34,7 +34,7 @@ from app.business_config import (
 from app.catalogo import catalogo
 from app.estado import limpiar_revision, listar_revision, pausar_bot, reactivar_bot
 from app.logging_conf import get_logger, setup_logging
-from app.models import parse_inbound, parse_outbound_command
+from app.models import bloque_saliente, parse_inbound, parse_outbound_command
 from app.odoo import odoo
 from app.panel import agentes_custom, conocimiento, prompt_store, telegram
 from app.panel.analista import analizar_y_sugerir
@@ -212,14 +212,22 @@ async def webhook_ycloud(
             background.add_task(reactivar_bot if cmd == ".on" else pausar_bot, destino)
         return JSONResponse({"ok": True, "comando": cmd})
 
-    # Mensaje SALIENTE (whatsapp.message.updated): detectar intervención del
-    # supervisor desde YCloud para pausar el bot en ese chat.
-    if body.get("type") == "whatsapp.message.updated":
-        background.add_task(manejar_saliente, body)
-        return JSONResponse({"ok": True, "saliente": True})
-
     msg = parse_inbound(body)
     if msg is None:
+        # Mensaje SALIENTE: es cómo detectamos que un humano le escribió al cliente
+        # (desde YCloud o, en un número COEXISTENTE, desde el celular) para pausar el
+        # bot 30 min en ese chat. No se exige un `type` puntual: alcanza con que traiga
+        # un mensaje saliente, porque el nombre del evento cambia según el caso.
+        if bloque_saliente(body):
+            background.add_task(manejar_saliente, body)
+            return JSONResponse({"ok": True, "saliente": True})
+        # Evento que no sabemos interpretar: lo logueamos con sus claves para poder
+        # ver qué manda YCloud de verdad (clave para depurar la coexistencia).
+        log.info(
+            "evento_no_reconocido",
+            tipo=body.get("type", "?"),
+            claves=sorted(body.keys())[:12],
+        )
         return JSONResponse({"ok": True, "ignored": body.get("type", "?")})
 
     log.info(

@@ -156,12 +156,43 @@ def parse_inbound(body: dict) -> InboundMessage | None:
     )
 
 
+# Nombres posibles del bloque de un mensaje SALIENTE. YCloud usa `whatsappMessage`,
+# pero con un número COEXISTENTE (app de WhatsApp Business + API) el mensaje que el
+# encargado manda desde el celular puede llegar con otro nombre o con otro `type` de
+# evento. Si no lo reconocemos, el bot no se enteraría de que un humano contestó y
+# seguiría respondiéndole encima al cliente.
+CLAVES_SALIENTE = (
+    "whatsappMessage",
+    "whatsappOutboundMessage",
+    "whatsappOutbound",
+    "whatsappSentMessage",
+)
+
+
+def bloque_saliente(body: dict) -> dict:
+    """Devuelve el bloque del mensaje saliente, sea cual sea el nombre del campo."""
+    for clave in CLAVES_SALIENTE:
+        v = body.get(clave)
+        if isinstance(v, dict) and v:
+            return v
+    return {}
+
+
+def es_evento_entrante(body: dict) -> bool:
+    """True si el evento trae un mensaje ENTRANTE del cliente."""
+    return bool(body.get("whatsappInboundMessage")) or (
+        body.get("type") == "whatsapp.inbound_message.received"
+    )
+
+
 def parse_outbound_command(body: dict) -> tuple[str, str] | None:
     """Detecta los comandos `.on` / `.off` que manda el encargado desde el número.
 
     Devuelve (comando, chat_id) o None. Equivale a `Verifica Palabra Clave2`.
+    Funciona con cualquier forma del bloque saliente (ver CLAVES_SALIENTE), así el
+    comando también sirve escribiéndolo desde el celular del número coexistente.
     """
-    outbound = body.get("whatsappMessage") or {}
+    outbound = bloque_saliente(body)
     if not outbound.get("id"):
         return None
     texto = str(_g(outbound, "text", "body")).strip().lower()
@@ -172,14 +203,20 @@ def parse_outbound_command(body: dict) -> tuple[str, str] | None:
 
 
 def parse_message_updated(body: dict) -> dict | None:
-    """Evento `whatsapp.message.updated`: actualización de un mensaje SALIENTE.
+    """Datos de un mensaje SALIENTE (lo que salió hacia el cliente).
 
-    Se usa para detectar cuando el supervisor le escribe al cliente desde YCloud.
+    Se usa para detectar cuándo un humano le escribió al cliente: desde YCloud o —en
+    un número COEXISTENTE— desde la app de WhatsApp en el celular. Ya NO se exige que
+    el evento sea exactamente `whatsapp.message.updated`: alcanza con que traiga un
+    mensaje saliente con id y destino, porque el nombre del evento cambia según el
+    caso. Que sea del bot o de un humano lo decide `es_msg_bot` (el bot registra todo
+    lo que envía), así que relajar esto no genera falsas tomas de control.
+
     Devuelve {id, to, from, status, texto} o None si no aplica.
     """
-    if body.get("type") != "whatsapp.message.updated":
+    if es_evento_entrante(body):
         return None
-    m = body.get("whatsappMessage") or body.get("whatsappOutboundMessage") or {}
+    m = bloque_saliente(body)
     mid = str(_g(m, "id") or _g(m, "wamid") or "")
     to = str(_g(m, "to") or "")
     if not mid or not to:
