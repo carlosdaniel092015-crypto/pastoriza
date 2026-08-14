@@ -122,11 +122,27 @@ class TestPuntajeYSemaforo:
         """Ya pagó y el pedido existe: no hay a quién llamar, va al final de la fila."""
         p = score.puntuar([], {"pedido", "comprobante", "lineas"})
         assert p["sem"] == "cerrado"
+        assert score.falta_pago(p["hitos"]) is False
         assert score.PRIORIDAD["cerrado"] < score.PRIORIDAD["verde"]
 
-    def test_pedido_sin_pago_sigue_urgente(self):
-        p = score.puntuar([], {"pedido", "lineas"})
-        assert p["sem"] == "verde"
+    def test_si_el_pedido_existe_va_a_pedido_creado_aunque_no_haya_comprobante(self):
+        """Caso real: RETIRO EN TIENDA. Paga en el mostrador, nunca manda comprobante.
+
+        Con la regla anterior (pedido + prueba de pago) un pedido real de retiro
+        quedaba como "cerca de cerrar", que es falso: el pedido ya existe en Odoo.
+        """
+        p = score.puntuar([], {"pedido", "lineas", "contacto", "cotizo",
+                               "sobre_minimo", "dio_direccion"})
+        assert p["sem"] == "cerrado"
+        # Pero el pago pendiente NO se esconde: se marca aparte.
+        assert score.falta_pago(p["hitos"]) is True
+
+    def test_falta_pago_solo_aplica_si_hay_pedido(self):
+        assert score.falta_pago(["cotizo", "pidio_cuentas"]) is False
+        assert score.falta_pago([]) is False
+        assert score.falta_pago(None) is False
+        assert score.falta_pago(["pedido"]) is True
+        assert score.falta_pago(["pedido", "dijo_pago"]) is False
 
     def test_el_puntaje_no_pasa_de_100(self):
         p = score.puntuar([], set(score.PESOS))

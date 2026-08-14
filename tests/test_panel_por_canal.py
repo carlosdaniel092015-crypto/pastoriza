@@ -202,6 +202,14 @@ class TestSemaforoEnLaLista:
         fila = _get(cliente, "/panel/api/chats")["chats"][0]
         assert fila["score"] is None and fila["sem"] == "" and fila["hitos"] == []
 
+    def test_avisa_cuando_un_pedido_no_tiene_comprobante(self, cliente):
+        self._chat(cliente, "18091110007", score=100, score_sem="cerrado",
+                   score_hitos=["pedido", "lineas", "contacto"])
+        assert _get(cliente, "/panel/api/chats")["chats"][0]["falta_pago"] is True
+        self._chat(cliente, "18091110007", score=100, score_sem="cerrado",
+                   score_hitos=["pedido", "comprobante"])
+        assert _get(cliente, "/panel/api/chats")["chats"][0]["falta_pago"] is False
+
     def test_cuenta_los_que_estan_por_cerrar_por_canal(self, cliente):
         self._chat(cliente, "18091110003", score=60, score_sem="verde")
         self._chat(cliente, "18091110004", score=15, score_sem="amarillo")

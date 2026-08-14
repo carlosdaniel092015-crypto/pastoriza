@@ -324,6 +324,9 @@ async def api_chats(x_panel_token: str | None = Header(default=None)) -> dict:
             "score": m.get("score"),
             "sem": m.get("score_sem", "") or "",
             "hitos": score.etiquetas(m.get("score_hitos")),
+            # Pedido creado sin prueba de pago: en un envío hay que esperar la
+            # transferencia antes de despachar; en un retiro se paga en el mostrador.
+            "falta_pago": score.falta_pago(m.get("score_hitos")),
             "canal": canal,
             "canal_nombre": (
                 "Sin canal" if canal == SIN_CANAL else nombre_canal(emisor, mapa_canales)
