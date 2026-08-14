@@ -144,6 +144,26 @@ PANEL_HTML = r"""<!doctype html>
   .sem.amarillo{background:var(--cinta)}
   .sem.cerrado{background:var(--senal);border-radius:2px}
   .sem.gris{background:var(--line)}
+  .semcols{display:grid;grid-template-columns:repeat(auto-fit,minmax(230px,1fr));gap:12px;margin-top:14px}
+  .semcol{background:var(--panel2);border:1px solid var(--line);border-radius:var(--r);overflow:hidden;
+    display:flex;flex-direction:column;min-height:120px}
+  .semcol>h4{display:flex;align-items:center;gap:8px;margin:0;padding:10px 12px;font-size:12.5px;
+    border-bottom:1px solid var(--line);background:var(--panel)}
+  .semcol>h4 .c{margin-left:auto;font-family:var(--mono);font-size:12px;color:var(--mut)}
+  .semcol .cuerpo{padding:6px;display:flex;flex-direction:column;gap:6px;max-height:52vh;overflow:auto}
+  .semcol .expl{padding:0 12px 10px;font-size:11px;color:var(--mut)}
+  .semitem{background:var(--bg);border:1px solid var(--line);border-left:3px solid var(--line);
+    border-radius:6px;padding:8px 10px;text-align:left;cursor:pointer;color:var(--tx)}
+  .semitem:hover{border-color:var(--senal)}
+  .semitem.verde{border-left-color:#3FB950} .semitem.amarillo{border-left-color:var(--cinta)}
+  .semitem.cerrado{border-left-color:var(--senal)} .semitem.gris{border-left-color:var(--line)}
+  .semitem .nm{font-weight:600;font-size:13px;display:flex;gap:6px;align-items:center}
+  .semitem .nm .h{margin-left:auto;font-family:var(--mono);font-size:10.5px;color:var(--mut)}
+  .semitem .ul{color:var(--mut);font-size:12px;margin-top:2px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .badge.verde{background:#3FB950}
+  /* El color también en la LISTA de conversaciones: una barra en el borde, no sólo el punto. */
+  .chat.sem-verde{border-left:3px solid #3FB950} .chat.sem-amarillo{border-left:3px solid var(--cinta)}
+  .chat.sem-cerrado{border-left:3px solid var(--senal)} .chat.sem-gris{border-left:3px solid transparent}
   .hitos{display:flex;gap:4px;flex-wrap:wrap;margin-top:4px}
   .hito{font-size:9.5px;font-family:var(--mono);color:var(--mut);border:1px solid var(--line);
     border-radius:3px;padding:1px 5px}
@@ -392,6 +412,7 @@ PANEL_HTML = r"""<!doctype html>
       <button class="it" data-v="config"><span class="n">03</span>Config</button>
       <button class="it" data-v="prompt"><span class="n">04</span>Prompt</button>
       <button class="it" data-v="aprendizaje"><span class="n">05</span>Aprendizaje<span class="badge" id="badgeSug" style="display:none">0</span></button>
+      <button class="it" data-v="semaforo"><span class="n">06</span>Semáforo<span class="badge verde" id="badgeSem" style="display:none">0</span></button>
       <div class="foot"><button class="themebtn" onclick="toggleTheme()" id="themebtn" title="Cambiar tema">☾</button><div class="ver mono" id="ver" title="Versión que está corriendo en el servidor">—</div></div>
     </nav>
 
@@ -505,6 +526,15 @@ PANEL_HTML = r"""<!doctype html>
           <div id="correcciones" class="meta" style="margin-top:8px">—</div>
         </div>
       </section>
+      <!-- Semáforo de cierre -->
+      <section class="view" id="v-semaforo">
+        <div class="pane">
+          <h2>Semáforo de cierre</h2>
+          <div class="sub">Quién está más cerca de comprar, según lo que YA hizo en la conversación. Sirve para ordenar a quién llamas primero: el bot atiende igual a todos.</div>
+          <div class="filters" id="semacc"></div>
+          <div id="semcols" class="semcols"></div>
+        </div>
+      </section>
     </main>
   </div>
 </div>
@@ -514,7 +544,7 @@ PANEL_HTML = r"""<!doctype html>
 const $ = s => document.querySelector(s);
 let TOKEN = localStorage.getItem('panel_token') || '';
 let lastEventId=0, selChat=null, chatsCache=[], alertCount=0, alerts=[], filtro='todos', prodMap={}, curItems=[];
-const TITULOS={conv:'Conversaciones',alertas:'Alertas',config:'Config',prompt:'Prompt',aprendizaje:'Aprendizaje'};
+const TITULOS={conv:'Conversaciones',alertas:'Alertas',config:'Config',prompt:'Prompt',aprendizaje:'Aprendizaje',semaforo:'Semáforo'};
 
 function headers(){ return TOKEN?{'X-Panel-Token':TOKEN,'Content-Type':'application/json'}:{'Content-Type':'application/json'}; }
 async function api(path,opt){ const r=await fetch('/panel/api'+path,{headers:headers(),...(opt||{})});
@@ -540,6 +570,7 @@ document.querySelectorAll('nav.side .it').forEach(b=>b.onclick=()=>{
   document.querySelectorAll('nav.side .it').forEach(x=>x.classList.remove('active')); b.classList.add('active');
   document.querySelectorAll('.view').forEach(v=>v.classList.remove('active')); $('#v-'+b.dataset.v).classList.add('active');
   if(b.dataset.v==='config') loadCfg(); if(b.dataset.v==='prompt') loadPrompt(); if(b.dataset.v==='aprendizaje') loadAprendizaje();
+  if(b.dataset.v==='semaforo') renderSemaforo();
   marcarComun();  // el aviso de "esto es común a los dos canales" se re-pinta al entrar
   if(b.dataset.v==='alertas'){ alertCount=0; renderBadge(); if(b.dataset.filtro){ setFiltro(b.dataset.filtro); } }
 });
@@ -572,7 +603,7 @@ async function loadChats(){ try{ const d=await api('/chats'); chatsCache=d.chats
   CANALES=d.canales||[]; renderCanales();
   // Si el canal elegido ya no existe (se renombró o no tiene chats), volver a Todos.
   if(canalSel && !CANALES.some(c=>c.canal===canalSel)){ canalSel=''; localStorage.setItem('panel_canal',''); renderCanales(); }
-  renderChats(); loadStats(); marcarComun(); }
+  renderChats(); loadStats(); marcarComun(); renderSemaforo(); }
   catch(e){
     // Antes esto se tragaba el error y la lista quedaba en "Cargando…" para siempre,
     // sin pestañas y con los contadores en 0: imposible saber qué pasó. Ahora se ve.
@@ -620,7 +651,7 @@ function setCanal(id){ canalSel=id; localStorage.setItem('panel_canal',id);
   // que aparecer los valores DE ESE número, no los del anterior.
   const v=document.querySelector('nav.side .it.active'); const cual=v?v.dataset.v:'';
   if(cual==='config') loadCfg(); if(cual==='prompt') loadPrompt();
-  if(cual==='aprendizaje') loadAprendizaje(); }
+  if(cual==='aprendizaje') loadAprendizaje(); renderSemaforo(); }
 function renderCanales(){ const el=$('#canaltabs'); if(!el)return;
   if(CANALES.length<2){ el.style.display='none'; return; }  // un solo número: sin pestañas
   el.style.display='flex';
@@ -663,6 +694,56 @@ function tituloSem(c){
   const t=TEXTO_SEM[c.sem||'gris']||'Sin señales todavía';
   const h=(c.hitos||[]).join(' · ');
   return h?(t+': '+h):(t+' (todavía no hizo nada medible; no significa que no vaya a comprar)');
+}
+// ---- Módulo Semáforo: las conversaciones agrupadas por color ----
+// Se arma con `chatsCache`, que el poll ya trae: no pide nada nuevo al servidor.
+const COLS=[
+  {k:'verde',    t:'Cerca de cerrar',  e:'Pidió las cuentas, cotizó sobre el mínimo, dio dirección o ya dice que pagó. Estos son los que conviene llamar primero.'},
+  {k:'amarillo', t:'Interesado',       e:'Avanzó algo (cotizó, eligió envío o retiro) pero todavía no llegó al momento de pagar.'},
+  {k:'gris',     t:'Sin señales aún',  e:'Todavía no hizo nada medible. NO significa que no vaya a comprar: muchos preguntan hoy y compran semanas después.'},
+  {k:'cerrado',  t:'Pedido creado',    e:'Ya pagó y su pedido está en Odoo. No necesita llamada de venta.'},
+];
+function grupoSem(c){ return c.sem || 'gris'; }   // sin datos se muestra con los grises
+function renderSemaforo(){
+  const el=$('#semcols'); if(!el) return;
+  const lista=chatsDelCanal();
+  const porCol={}; COLS.forEach(c=>porCol[c.k]=[]);
+  lista.forEach(c=>porCol[grupoSem(c)].push(c));
+  const nverde=porCol.verde.length;
+  const b=$('#badgeSem'); if(b){ if(nverde){b.style.display='block';b.textContent=nverde;}else b.style.display='none'; }
+  el.innerHTML=COLS.map(col=>{
+    const items=col.k==='gris'
+      ? porCol[col.k].slice().sort((a,b)=>(b.ultimo_ts||0)-(a.ultimo_ts||0))
+      : porCol[col.k].slice().sort((a,b)=>(b.score||0)-(a.score||0)||(b.ultimo_ts||0)-(a.ultimo_ts||0));
+    return `<div class="semcol">
+      <h4><span class="sem ${col.k}"></span>${col.t}<span class="c">${items.length}</span></h4>
+      <div class="expl">${col.e}</div>
+      <div class="cuerpo">${items.length?items.slice(0,60).map(c=>{
+        const nombre=c.user_name||c.chat_id;
+        const hs=(c.hitos||[]).slice(0,3).map(h=>`<span class="hito">${esc(h)}</span>`).join('');
+        return `<button class="semitem ${col.k}" onclick="verConv('${c.chat_id}')" title="${esc(tituloSem(c))}">
+          <div class="nm">${esc(nombre)}${(c.score&&col.k!=='gris')?`<span class="hito">${c.score}</span>`:''}<span class="h">${fmtRel(c.ultimo_ts)}</span></div>
+          <div class="ul">${quienDijo(c.ultimo_de)}${esc(c.ultimo)||'—'}</div>
+          ${hs?`<div class="hitos">${hs}</div>`:''}</button>`;
+      }).join('')+(items.length>60?`<div class="empty" style="font-size:11px">+${items.length-60} más</div>`:'')
+      :'<div class="empty" style="font-size:12px">—</div>'}</div></div>`;
+  }).join('');
+  // Chats que nunca pasaron por el cálculo: se pueden pintar leyendo su historial.
+  const sinCalcular=lista.filter(c=>c.score==null).length;
+  const acc=$('#semacc');
+  if(acc) acc.innerHTML = sinCalcular
+    ? `<span class="meta">${sinCalcular} conversación(es) sin calcular: son de antes de que existiera el semáforo.</span>
+       <span class="sp"></span><button class="btn" onclick="calcularSemaforo()">Calcular con el historial</button><span class="meta" id="semmsg"></span>`
+    : `<span class="meta">Todas las conversaciones de este canal ya tienen semáforo. Se actualiza solo en cada mensaje.</span>
+       <span class="sp"></span><button class="btn sec" onclick="calcularSemaforo(true)">Recalcular todo</button><span class="meta" id="semmsg"></span>`;
+}
+async function calcularSemaforo(rehacer){
+  const msg=$('#semmsg'); if(msg) msg.textContent='Leyendo historiales…';
+  try{
+    const d=await apiC('/chats/calcular-semaforo'+(rehacer?'?rehacer=true':''),{method:'POST'});
+    if(msg) msg.innerHTML=`<span class="ok">Listo: ${d.calculadas||0} calculada(s), ${d.con_senales||0} con señales.</span>`;
+    _chatsSig=''; await loadChats(); renderSemaforo();
+  }catch(e){ if(msg) msg.innerHTML='<span class="bad">No se pudo calcular: '+esc(String(e))+'</span>'; }
 }
 // Prefijo de quién habló último en la conversación (el cliente, el bot o un asesor).
 function quienDijo(de){
@@ -713,7 +794,7 @@ function renderChats(){
     // Con "Todos" se muestra de qué número entró; dentro de un canal sobra.
     const cch=(!canalSel&&c.canal_nombre)?`<span class="cch" title="Entró por ${esc(c.canal_nombre)}">${esc(c.canal_nombre)}</span>`:'';
     const sem=c.sem?`<span class="sem ${c.sem}" title="${esc(tituloSem(c))}"></span>`:'';
-    return `<button class="chat ${c.chat_id===selChat?'sel':''}" onclick="openChat('${c.chat_id}')">
+    return `<button class="chat ${c.chat_id===selChat?'sel':''} ${c.sem?'sem-'+c.sem:''}" onclick="openChat('${c.chat_id}')">
       <div class="top">${sem}<span class="n ${esNum(nombre)?'num':''}">${esc(nombre)}</span>${tag}<span class="h">${fmtRel(c.ultimo_ts)}</span>${dot}</div>
       <div class="m">${quienDijo(c.ultimo_de)}${esc(c.ultimo)||'—'}${cch}</div></button>`;
   }).join('');

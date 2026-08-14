@@ -101,6 +101,85 @@ def detectar(
     return hitos
 
 
+# --------------------------------------------------- desde el historial ---
+# Las conversaciones que ya existían no tienen semáforo: se calculó siempre al cerrar
+# un turno. Esto lo reconstruye leyendo el historial que ya está en Redis, para no
+# tener que esperar a que cada cliente vuelva a escribir. Se hace UNA vez por chat (el
+# resultado se guarda en el chatmeta), a pedido del operador desde el panel.
+#
+# Se leen SOLO salidas de tools (texto que escribió el código, no el modelo) y los
+# mensajes del cliente. Lo que el modelo redactó se ignora a propósito: si dijo "tu
+# pedido quedó registrado" sin que existiera, no debe contar como hito.
+_MARCAS_TOOL = {
+    "contacto": ("EXISTE: partner_id=", "OK: contacto creado, partner_id=", "OK: contacto "),
+    "pedido": ("OK: pedido creado con número",),
+    "lineas": ("agregado al pedido",),
+    "cotizo": ("COTIZACION (para mostrar al cliente):",),
+}
+
+
+def _texto_de(item: dict) -> str:
+    contenido = item.get("content") if isinstance(item, dict) else None
+    if isinstance(contenido, list):
+        contenido = " ".join(
+            str((x or {}).get("text") or (x or {}).get("content") or "") for x in contenido
+        )
+    if contenido is None:
+        # Salida de una tool (function_call_output): es lo más confiable que hay.
+        contenido = item.get("output") if isinstance(item, dict) else None
+    return str(contenido or "")
+
+
+def desde_historial(items: list[dict] | None) -> tuple[set[str], float]:
+    """(hitos, total cotizado) deducibles del historial de una conversación."""
+    from app.media import es_comprobante_de
+
+    hitos: set[str] = set()
+    total_cotizado = 0.0
+    for item in items or []:
+        if not isinstance(item, dict):
+            continue
+        texto = _texto_de(item)
+        if not texto:
+            continue
+        rol = str(item.get("role") or "")
+        tipo = str(item.get("type") or "")
+
+        # 1. Lo que dijo el CLIENTE (y el bloque de análisis de imagen del turno).
+        if rol == "user":
+            hitos |= detectar(texto)
+            if es_comprobante_de(texto):
+                hitos.add("comprobante")
+            continue
+
+        # 2. Salidas de TOOLS. Sólo estas: lo que redactó el modelo no cuenta.
+        if tipo.startswith("function_call") or rol == "tool":
+            for hito, marcas in _MARCAS_TOOL.items():
+                if any(m in texto for m in marcas):
+                    hitos.add(hito)
+            if "COTIZACION (para mostrar al cliente):" in texto:
+                for linea in texto.splitlines():
+                    if linea.startswith("TOTAL"):
+                        try:
+                            total_cotizado = max(
+                                total_cotizado,
+                                float(linea.split("RD$")[1].replace(",", "").strip()),
+                            )
+                        except (IndexError, ValueError):
+                            pass
+                if "Retiro en tienda" in texto or "Envio: RD$" in texto:
+                    hitos.add("eligio_entrega")
+    return hitos, total_cotizado
+
+
+def reconstruir(items: list[dict] | None, monto_minimo: float = 0.0) -> dict:
+    """Semáforo de una conversación ya existente, a partir de su historial."""
+    hitos, total = desde_historial(items)
+    if total and monto_minimo > 0 and total >= monto_minimo:
+        hitos.add("sobre_minimo")
+    return puntuar([], hitos)
+
+
 def puntuar(previos: list[str] | None, nuevos: set[str] | None = None) -> dict:
     """Score acumulado de la conversación. Devuelve lo que se guarda en el chatmeta.
 
@@ -132,6 +211,8 @@ def etiquetas(hitos: list[str] | None) -> list[str]:
 
 __all__ = [
     "PESOS",
+    "desde_historial",
+    "reconstruir",
     "PRIORIDAD",
     "UMBRAL_AMARILLO",
     "UMBRAL_VERDE",

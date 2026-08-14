@@ -223,7 +223,7 @@ Claude"), alertas por tipo, notificación opcional a Telegram, y `/health`, `/he
 
 ## 8. Calidad
 
-**317 tests** de lógica pura y determinista (enrutado, matching, cotización, saneo de salida,
+**332 tests** de lógica pura y determinista (enrutado, matching, cotización, saneo de salida,
 entrega, repetición, prompts, separación por canal), corren sin secretos ni red
 (`tests/conftest.py` fija dummies; el panel se prueba con TestClient + `tests/fake_redis.py`).
 Lo no-determinista (el modelo) queda acotado por las reglas duras.

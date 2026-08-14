@@ -217,6 +217,78 @@ class TestSemaforoEnLaLista:
         assert _get(cliente, "/panel/api/chats")["chats"][0]["hitos"] == []
 
 
+class TestCalcularSemaforoDeLosViejos:
+    """Pintar las conversaciones que ya existían, leyendo su historial UNA vez."""
+
+    def _chat_con_historial(self, chat, items, **extra):
+        import json as _json
+
+        from app.panel import events
+        from app.settings import settings
+
+        import app.redis_client as rc
+        rc._pool.hashes.setdefault(events.CHATMETA_KEY, {})[chat] = _json.dumps(
+            {"chat_id": chat, "emisor": A, "ultimo": "hola", "ultimo_de": "cliente",
+             "ultimo_ts": 1234.0, **extra}
+        )
+        rc._pool.listas[settings.key("session", chat)] = [
+            _json.dumps(i) for i in items
+        ]
+
+    def test_calcula_y_persiste(self, cliente):
+        # Historial REALISTA: los tool-calls van en PAR (call + output), porque
+        # `RedisSession.get_items` descarta los huérfanos (saneo del 400 de OpenAI).
+        self._chat_con_historial("18091110010", [
+            {"role": "user", "content": "a que cuenta deposito?"},
+            {"type": "function_call", "call_id": "c1", "name": "cotizar", "arguments": "{}"},
+            {"type": "function_call_output", "call_id": "c1",
+             "output": "COTIZACION (para mostrar al cliente):\nTOTAL: RD$5550.00"},
+        ])
+        r = cliente.post(f"/panel/api/chats/calcular-semaforo?canal={CA}")
+        assert r.status_code == 200, r.text
+        assert r.json()["calculadas"] == 1 and r.json()["con_senales"] == 1
+
+        fila = _get(cliente, "/panel/api/chats")["chats"][0]
+        assert fila["sem"] == "verde"
+        assert "Pidió las cuentas" in fila["hitos"]
+        # Y no volvió a la cola: ya no está pendiente.
+        assert cliente.post(
+            f"/panel/api/chats/calcular-semaforo?canal={CA}"
+        ).json()["pendientes"] == 0
+
+    def test_no_toca_el_ultimo_mensaje_ni_la_hora(self, cliente):
+        """Si moviera `ultimo_ts`, todas las conversaciones viejas saltarían a 'ahora'."""
+        self._chat_con_historial("18091110011", [
+            {"role": "user", "content": "ya te transferi"},
+        ], ultimo="ya te transferi", ultimo_de="cliente")
+        cliente.post(f"/panel/api/chats/calcular-semaforo?canal={CA}")
+        fila = _get(cliente, "/panel/api/chats")["chats"][0]
+        assert fila["ultimo_ts"] == 1234.0
+        assert fila["ultimo"] == "ya te transferi"
+        assert fila["ultimo_de"] == "cliente"
+
+    def test_no_recalcula_lo_que_ya_tiene_salvo_que_se_pida(self, cliente):
+        self._chat_con_historial("18091110012", [
+            {"role": "user", "content": "a que cuenta deposito?"},
+        ], score=0, score_sem="gris", score_hitos=[])
+        assert cliente.post(
+            f"/panel/api/chats/calcular-semaforo?canal={CA}"
+        ).json()["calculadas"] == 0
+        # Con `rehacer` sí, y ahí corrige lo que estaba mal.
+        assert cliente.post(
+            f"/panel/api/chats/calcular-semaforo?canal={CA}&rehacer=true"
+        ).json()["calculadas"] == 1
+        assert _get(cliente, "/panel/api/chats")["chats"][0]["sem"] == "amarillo"
+
+    def test_solo_el_canal_pedido(self, cliente):
+        self._chat_con_historial("18091110013", [
+            {"role": "user", "content": "a que cuenta deposito?"},
+        ])
+        assert cliente.post(
+            f"/panel/api/chats/calcular-semaforo?canal={CB}"
+        ).json()["calculadas"] == 0
+
+
 class TestRendimientoYFallas:
     """La lista de chats es lo que más se refresca: no puede costar una ida a Redis
     por conversación, ni mentir cuando Redis no responde."""

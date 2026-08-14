@@ -13,7 +13,7 @@ Entorno **Windows**; hay `Makefile` pero en Windows conviene invocar el venv dir
 
 ```bash
 # venv (Python 3.12)
-./.venv/Scripts/python.exe -m pytest -q                          # toda la suite (317 tests)
+./.venv/Scripts/python.exe -m pytest -q                          # toda la suite (332 tests)
 ./.venv/Scripts/python.exe -m pytest tests/test_enrutador.py -q  # un archivo
 ./.venv/Scripts/python.exe -m pytest tests/test_seguridad.py::TestNoInventarFotos -q  # una clase/test
 
@@ -76,7 +76,10 @@ comprobante, cotizó, pedido…). Sirve para **ordenar a quién atiende primero 
 más: NO se inyecta en ningún prompt, NO cambia una sola respuesta del bot, NO tiene puntaje
 negativo y NUNCA mide cómo escribe el cliente (ortografía/audio/largo = proxy de clase, y
 `base_comun.md` lo prohíbe). Gris = sin señales todavía ≠ malo. Se calcula en `_puntuar`
-(pipeline) y viaja en el chatmeta; el panel lo muestra siempre con su desglose en texto. Si
+(pipeline) y viaja en el chatmeta; el panel tiene un módulo propio (**06 Semáforo**, columnas por
+color) y lo muestra siempre con su desglose en texto. Para las conversaciones que ya existían,
+`score.reconstruir` lo deduce del historial (sólo mensajes del cliente y SALIDAS DE TOOLS: lo que
+redactó el modelo no cuenta) desde `POST /api/chats/calcular-semaforo`, una vez por chat. Si
 agregás hitos, agregalos a `PESOS` y NO agregues nada que castigue al mayorista (pedir la lista,
 regatear, preguntar mucho).
 
