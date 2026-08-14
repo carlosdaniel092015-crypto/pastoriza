@@ -797,18 +797,25 @@ function copiarError(id){ const e=alerts.find(x=>x.id===id); if(!e)return; const
   navigator.clipboard.writeText(rep).then(()=>{const b=event.target,t=b.textContent;b.textContent='✓ Copiado';setTimeout(()=>b.textContent=t,2000);}).catch(()=>alert('Copia manual.')); }
 
 // config
-const GRUPOS=[{t:'Envío y entrega',s:'Costo, días y notas de envío.',campos:['precio_envio','dias_envio','hora_corte','nota_envio','info_envio','minimo_envio']},{t:'Pagos',s:'Formas de pago, mínimo, cuentas y comprobante.',campos:['monto_minimo','formas_pago','contra_entrega','banco1_nombre','banco1_cuenta','banco2_nombre','banco2_cuenta','titular','cedula','msg_comprobante']},{t:'Negocio',s:'Datos de la tienda.',campos:['direccion','telefono','horario_tienda','website','maps_url']},{t:'Venta por fardo (opcional)',s:'Déjalo vacío hasta confirmar cantidad por fardo y su envío mínimo.',campos:['fardo_cantidad','fardo_envio_minimo']},{t:'Mensajes del bot',s:'Notas y frases que usa el bot.',campos:['nota_botellon','nota_stock','msg_escalar']}];
-const LBL={precio_envio:'Precio de envío',dias_envio:'Días de entrega',hora_corte:'Hora de corte',nota_envio:'Notas de envío',info_envio:'Info de envío',banco1_nombre:'Banco',banco1_cuenta:'Número de cuenta',banco2_nombre:'Banco 2',banco2_cuenta:'Número de cuenta 2',titular:'Titular',cedula:'RNC',msg_comprobante:'Mensaje de comprobante',direccion:'Dirección',telefono:'Teléfono',horario_tienda:'Horario',website:'Website',maps_url:'Enlace de Maps',nota_botellon:'Nota de botellón',nota_stock:'Cuando no hay stock',msg_escalar:'Cuando pasa a un asesor',monto_minimo:'Pedido mínimo (RD$)',minimo_envio:'Mínimo para envío (por tamaño)',formas_pago:'Formas de pago',contra_entrega:'¿Pago contra entrega?',fardo_cantidad:'Unidades por fardo',fardo_envio_minimo:'Envío mínimo por fardo'};
-const HINTS={precio_envio:'En el chat: "El envío dentro del Gran Santo Domingo son RD$ …"',hora_corte:'Después de esa hora el pedido sale al día siguiente.',msg_comprobante:'Se envía justo después de dar la cuenta.',msg_escalar:'En el chat aparece antes de "Pasado a un asesor".'};
+// `canales` va PRIMERO y es COMÚN a los dos números a propósito: define qué
+// pestañas existen. Si faltara del formulario, guardar la config lo borraría y los
+// nombres de los canales volverían al default.
+const GRUPOS=[{t:'Números de WhatsApp (canales)',s:'Uno por línea: número = nombre. Cada número tiene su propia pestaña arriba, con su configuración y sus conversaciones. Esta lista es común a los dos.',campos:['canales']},
+  {t:'Envío y entrega',s:'Costo, días y notas de envío.',campos:['precio_envio','dias_envio','hora_corte','nota_envio','info_envio','minimo_envio']},{t:'Pagos',s:'Formas de pago, mínimo, cuentas y comprobante.',campos:['monto_minimo','formas_pago','contra_entrega','banco1_nombre','banco1_cuenta','banco2_nombre','banco2_cuenta','titular','cedula','msg_comprobante']},{t:'Negocio',s:'Datos de la tienda.',campos:['direccion','telefono','horario_tienda','website','maps_url']},{t:'Venta por fardo (opcional)',s:'Déjalo vacío hasta confirmar cantidad por fardo y su envío mínimo.',campos:['fardo_cantidad','fardo_envio_minimo']},{t:'Mensajes del bot',s:'Notas y frases que usa el bot.',campos:['nota_botellon','nota_stock','msg_escalar']}];
+const LBL={canales:'Números y nombres',precio_envio:'Precio de envío',dias_envio:'Días de entrega',hora_corte:'Hora de corte',nota_envio:'Notas de envío',info_envio:'Info de envío',banco1_nombre:'Banco',banco1_cuenta:'Número de cuenta',banco2_nombre:'Banco 2',banco2_cuenta:'Número de cuenta 2',titular:'Titular',cedula:'RNC',msg_comprobante:'Mensaje de comprobante',direccion:'Dirección',telefono:'Teléfono',horario_tienda:'Horario',website:'Website',maps_url:'Enlace de Maps',nota_botellon:'Nota de botellón',nota_stock:'Cuando no hay stock',msg_escalar:'Cuando pasa a un asesor',monto_minimo:'Pedido mínimo (RD$)',minimo_envio:'Mínimo para envío (por tamaño)',formas_pago:'Formas de pago',contra_entrega:'¿Pago contra entrega?',fardo_cantidad:'Unidades por fardo',fardo_envio_minimo:'Envío mínimo por fardo'};
+const HINTS={canales:'Ej: 18099221092 = Tienda · 18294716701 = Mayorista. El nombre es sólo para verlo acá.',precio_envio:'En el chat: "El envío dentro del Gran Santo Domingo son RD$ …"',hora_corte:'Después de esa hora el pedido sale al día siguiente.',msg_comprobante:'Se envía justo después de dar la cuenta.',msg_escalar:'En el chat aparece antes de "Pasado a un asesor".'};
 let cfgDirty=0, cfgPropios=[];
 async function loadCfg(){ marcarComun(); const d=await apiC('/config'); cfgDirty=0;
   cfgPropios=d._propios||[];
+  // En "Todos" se edita la común: hay que decir qué número NO va a ver el cambio
+  // porque tiene ese campo personalizado.
+  if(!canalSel) avisoPropios(d._propios_por_canal||{});
   $('#cfg').innerHTML=GRUPOS.map(g=>`<div class="group"><h3>${g.t}</h3><div class="gsub">${g.s}</div><div class="grid">`+g.campos.map(k=>{const v=esc(String(d[k]!=null?d[k]:''));
     const hint=HINTS[k]?`<span class="hint">${HINTS[k]}</span>`:'';
     // `esprop`: este campo ya tiene un valor PROPIO de este número (no sigue al común).
     const pr=cfgPropios.includes(k)?' esprop':'';
     if(k==='precio_envio')return `<div class="fld${pr}"><label>${LBL[k]}</label><div class="prefix"><span>RD$</span><input id="cfg_${k}" value="${v}" oninput="cfgTouch()"/></div>${hint}</div>`;
-    const long=['info_envio','msg_comprobante','msg_escalar','nota_envio'].includes(k);
+    const long=['info_envio','msg_comprobante','msg_escalar','nota_envio','canales'].includes(k);
     return `<div class="fld${pr}" ${long?'style="grid-column:1/-1"':''}><label>${LBL[k]||k}</label>${long?`<textarea id="cfg_${k}" style="min-height:70px" oninput="cfgTouch()">${v}</textarea>`:`<input id="cfg_${k}" value="${v}" oninput="cfgTouch()"/>`}${hint}</div>`;
   }).join('')+`</div></div>`).join('');
   // Volver a heredar la común: sólo tiene sentido dentro de un canal con valores propios.
@@ -816,6 +823,12 @@ async function loadCfg(){ marcarComun(); const d=await apiC('/config'); cfgDirty
   $('#cfgmsg').textContent=canalSel
     ? (cfgPropios.length?cfgPropios.length+' campo(s) propios de este número.':'Este número hereda la config común.')
     : 'Sin cambios sin guardar.'; }
+function avisoPropios(mapa){ const sec=$('#v-config'); if(!sec)return;
+  const av=sec.querySelector('.comun'); if(!av)return;
+  const nums=Object.keys(mapa); if(!nums.length)return;
+  const detalle=nums.map(n=>esc(mapa[n].nombre)+' ('+mapa[n].campos.map(c=>esc(LBL[c]||c)).join(', ')+')').join(' · ');
+  av.innerHTML+='<div style="flex-basis:100%;margin-top:6px">⚠️ Estos números tienen valores <b>propios</b> que le ganan a lo común: '+detalle+
+    '. Para pisarlos, entrá a su pestaña y usá «Aplicar a los dos números» (o «Volver a la común»).</div>'; }
 function cfgTouch(){ cfgDirty++; $('#cfgmsg').innerHTML='<span class="warn">'+cfgDirty+' cambio(s) sin guardar</span>'; }
 async function saveCfg(){ const data={}; document.querySelectorAll('[id^=cfg_]').forEach(i=>data[i.id.slice(4)]=i.value);
   data._ambos=ambosDe('config');

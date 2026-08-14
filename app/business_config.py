@@ -195,6 +195,20 @@ async def overrides_de_canal(canal: str) -> dict:
     return await _leer_doc(key_canal(CONFIG_KEY, c)) or {}
 
 
+async def overrides_por_canal() -> dict[str, list[str]]:
+    """{canal: [campos propios]} de los canales que NO siguen del todo a la común.
+
+    El panel lo usa para avisar, al editar la común, qué número no va a ver el cambio
+    (porque tiene ese campo personalizado).
+    """
+    out: dict[str, list[str]] = {}
+    for c in await canales_configurados():
+        propios = await overrides_de_canal(c)
+        if propios:
+            out[c] = sorted(propios.keys())
+    return out
+
+
 async def canales_configurados() -> tuple[str, ...]:
     """Canales declarados en la config común (los números de YCloud del negocio)."""
     try:
@@ -216,19 +230,40 @@ async def save_config(
     """
     c = canal_id(canal)
     if ambos or not c:
-        # Aplicar a los dos: se guarda en la común y se BORRAN las propias. Si no se
-        # borraran, el canal que tuviera valores propios seguiría ignorando el cambio
-        # y el operador creería que aplicó a ambos.
+        # La lista de canales se PRESERVA si el que guarda no la manda (p.ej. el
+        # endpoint viejo de n8n): perderla borraría las pestañas del panel.
+        faltantes = [k for k in CAMPOS_COMUNES if k not in data]
+        if faltantes:
+            previo = await _leer_doc(CONFIG_KEY) or {}
+            data = {**data, **{k: previo[k] for k in faltantes if k in previo}}
         await _guardar_doc(CONFIG_KEY, data)
-        for otro in await canales_configurados():
-            try:
-                await get_redis().delete(key_canal(CONFIG_KEY, otro))
-            except Exception as exc:  # noqa: BLE001
-                log.warning("config_canal_no_borrada", canal=otro, error=str(exc))
+        if ambos:
+            # "Aplicar a los dos" es explícito: se borra lo propio de cada canal, si no
+            # el que tuviera valores propios seguiría ignorando el cambio y el operador
+            # creería que aplicó a ambos.
+            for otro in await canales_configurados():
+                try:
+                    await get_redis().delete(key_canal(CONFIG_KEY, otro))
+                except Exception as exc:  # noqa: BLE001
+                    log.warning("config_canal_no_borrada", canal=otro, error=str(exc))
+        # Sin `ambos` (guardar desde "Todos") se toca SÓLO la común: lo que un número
+        # tenga personalizado se respeta. Borrarlo sería una pérdida silenciosa.
         invalidar()
         return await load_config(COMUN, force=True)
 
-    propio = {k: v for k, v in data.items() if k not in CAMPOS_COMUNES}
+    # Sólo se guarda como PROPIO lo que de verdad difiere de la común. El panel manda
+    # el formulario completo: si guardáramos los 26 campos, el canal dejaría de heredar
+    # TODO (un cambio futuro en la común no le llegaría) y la marca de "campo propio"
+    # no diría nada porque estarían todos marcados.
+    comun = await _leer_doc(CONFIG_KEY)
+    valid = {f.name for f in fields(BusinessConfig)}
+    efectiva = asdict(
+        BusinessConfig(**{k: str(v) for k, v in (comun or {}).items() if k in valid})
+    )
+    propio = {
+        k: v for k, v in data.items()
+        if k not in CAMPOS_COMUNES and str(v) != str(efectiva.get(k, ""))
+    }
     await _guardar_doc(key_canal(CONFIG_KEY, c), propio)
     # La lista de canales es común: si vino en el formulario, va a la key común.
     comunes = {k: v for k, v in data.items() if k in CAMPOS_COMUNES}
@@ -297,6 +332,7 @@ __all__ = [
     "load_config",
     "save_config",
     "overrides_de_canal",
+    "overrides_por_canal",
     "canales_configurados",
     "resetear_canal",
     "invalidar",

@@ -33,6 +33,7 @@ from app.business_config import (
     nombre_canal,
     norm_num,
     overrides_de_canal,
+    overrides_por_canal,
     parsear_canales,
     resetear_canal,
     save_config,
@@ -648,7 +649,15 @@ async def api_config_get(
     c = canal_id(canal)
     cfg = config_as_dict(await load_config(c, force=True))
     propios = await overrides_de_canal(c) if c else {}
-    return {**cfg, "_canal": c, "_propios": sorted(propios.keys())}
+    salida = {**cfg, "_canal": c, "_propios": sorted(propios.keys())}
+    if not c:
+        # Editando la COMÚN: hay que avisar qué número no verá el cambio porque tiene
+        # ese campo personalizado (si no, el operador cree que aplicó a los dos).
+        salida["_propios_por_canal"] = {
+            num: {"nombre": nombre_canal(num), "campos": campos}
+            for num, campos in (await overrides_por_canal()).items()
+        }
+    return salida
 
 
 @panel_router.post("/api/config")
