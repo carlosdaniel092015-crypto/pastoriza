@@ -15,9 +15,10 @@ from typing import Any
 
 from openai import AsyncOpenAI
 
+from app.canales import COMUN, canal_id, formatear
 from app.estado import listar_revision
 from app.logging_conf import get_logger
-from app.panel import conocimiento, telegram
+from app.panel import conocimiento, events, telegram
 from app.settings import settings
 
 log = get_logger(__name__)
@@ -33,12 +34,58 @@ Devuelve SOLO este JSON: {"sugerencias":[{"texto":"...","riesgo":"bajo|alto"}]}.
 riesgo=bajo si es un ajuste menor de redacción/FAQ; riesgo=alto si cambia el flujo de venta o toca datos sensibles."""
 
 
-async def analizar_y_sugerir(auto_aplicar_bajo_riesgo: bool = False) -> dict:
-    """Analiza la cola de revisión y crea sugerencias. Devuelve un resumen."""
+async def _canal_de(chat_id: str) -> str:
+    """Canal (número nuestro) por el que entró esa conversación."""
+    try:
+        meta = await events.leer_chatmeta(str(chat_id))
+        return canal_id(meta.get("emisor", ""))
+    except Exception:  # noqa: BLE001
+        return COMUN
+
+
+async def analizar_y_sugerir(
+    auto_aplicar_bajo_riesgo: bool = False, canal: str = COMUN
+) -> dict:
+    """Analiza la cola de revisión y crea sugerencias, POR CANAL.
+
+    Cada número es un negocio aparte para la operación: sus casos se analizan por
+    separado y las mejoras que salen de ahí se aplican a ESE número. Con `canal` se
+    analiza sólo uno; sin canal se analizan todos los que tengan casos (una llamada
+    al modelo por canal).
+    """
     revision = await listar_revision(80)
     if not revision:
         return {"analizado": 0, "sugeridas": 0, "auto_aplicadas": 0, "nota": "sin casos"}
 
+    pedido = canal_id(canal)
+    # Agrupar los casos por canal: el resumen que ve el modelo no debe mezclar números.
+    por_canal: dict[str, list[dict]] = {}
+    for item in revision:
+        c = await _canal_de(str(item.get("chat_id", "")))
+        if pedido and c != pedido:
+            continue
+        por_canal.setdefault(c, []).append(item)
+
+    if not por_canal:
+        return {"analizado": 0, "sugeridas": 0, "auto_aplicadas": 0, "nota": "sin casos"}
+
+    total = {"analizado": 0, "sugeridas": 0, "auto_aplicadas": 0, "pendientes": 0}
+    detalle: dict[str, dict] = {}
+    for c, items in por_canal.items():
+        res = await _analizar_canal(items, auto_aplicar_bajo_riesgo, c)
+        detalle[c or "comun"] = res
+        for k in ("analizado", "sugeridas", "auto_aplicadas", "pendientes"):
+            total[k] += int(res.get(k, 0) or 0)
+    if len(detalle) > 1:
+        total["por_canal"] = detalle
+    else:
+        total.update({k: v for k, v in next(iter(detalle.values())).items() if k not in total})
+    return total
+
+
+async def _analizar_canal(
+    revision: list[dict], auto_aplicar_bajo_riesgo: bool, canal: str
+) -> dict:
     motivos = Counter()
     ejemplos: list[str] = []
     chats: list[str] = []
@@ -84,27 +131,36 @@ async def analizar_y_sugerir(auto_aplicar_bajo_riesgo: bool = False) -> dict:
             continue
         riesgo = "alto" if str(p.get("riesgo", "")).lower().startswith("alt") else "bajo"
         if riesgo == "bajo" and auto_aplicar_bajo_riesgo:
-            await conocimiento.add_regla(texto, origen="analisis-auto")
-            s = await conocimiento.add_sugerencia("regla", texto, riesgo, "analisis", chats[:8])
+            await conocimiento.add_regla(texto, origen="analisis-auto", canal=canal)
+            s = await conocimiento.add_sugerencia(
+                "regla", texto, riesgo, "analisis", chats[:8], canal=canal
+            )
             await conocimiento._set_estado_sugerencia(s["id"], "aprobada")
             auto += 1
         else:
-            s = await conocimiento.add_sugerencia("regla", texto, riesgo, "analisis", chats[:8])
+            s = await conocimiento.add_sugerencia(
+                "regla", texto, riesgo, "analisis", chats[:8], canal=canal
+            )
             pendientes.append(s)
         creadas += 1
 
     # Aviso a Telegram: resumen + una tarjeta por sugerencia con botones Aprobar/Rechazar.
+    # Se dice de QUÉ número salieron: al aprobarlas se aplican sólo a ese canal.
+    de_quien = f" del número {formatear(canal)}" if canal else ""
     if pendientes and telegram.configurado():
         await telegram.enviar(
-            f"🧠 Analista: {len(pendientes)} sugerencia(s) para revisar. "
+            f"🧠 Analista: {len(pendientes)} sugerencia(s){de_quien} para revisar. "
             "Apruébalas o recházalas aquí abajo (o en el panel → Aprendizaje)."
         )
         for s in pendientes:
             await telegram.enviar_sugerencia(s)
     elif auto and telegram.configurado():
-        await telegram.enviar(f"🧠 Analista: {auto} sugerencia(s) aplicada(s) automáticamente.")
+        await telegram.enviar(
+            f"🧠 Analista: {auto} sugerencia(s){de_quien} aplicada(s) automáticamente."
+        )
 
     return {
+        "canal": canal,
         "analizado": len(revision),
         "sugeridas": creadas,
         "auto_aplicadas": auto,

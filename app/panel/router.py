@@ -26,14 +26,18 @@ from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Response
 from app.media import convertir_a_jpg, convertir_audio_ogg
 
 from app.business_config import (
+    canales_configurados,
     config_as_dict,
     listar_anuncios,
     load_config,
     nombre_canal,
     norm_num,
+    overrides_de_canal,
     parsear_canales,
+    resetear_canal,
     save_config,
 )
+from app.canales import COMUN, canal_id
 from app.catalogo import catalogo
 from app.estado import (
     bot_global_apagado,
@@ -222,7 +226,13 @@ async def api_chats(x_panel_token: str | None = Header(default=None)) -> dict:
     ids = set(meta.keys()) | set(await _chat_ids_de_sesiones())
     # Nombres de los canales (números de YCloud) para mostrar en el panel.
     mapa_canales = parsear_canales((await load_config()).canales)
-    resumen: dict[str, dict] = {}
+    # Los canales CONFIGURADOS aparecen siempre como pestaña, incluso sin
+    # conversaciones todavía: si no, un número nuevo no se vería hasta el primer
+    # cliente y no habría dónde configurarlo.
+    resumen: dict[str, dict] = {
+        num: {"canal": num, "nombre": nombre, "total": 0, "esperando": 0, "en_asesor": 0}
+        for num, nombre in mapa_canales.items()
+    }
     chats = []
     for cid in ids:
         m = meta.get(cid, {})
@@ -263,7 +273,9 @@ async def api_chats(x_panel_token: str | None = Header(default=None)) -> dict:
             r["esperando"] += 1
 
     chats.sort(key=lambda c: c.get("ultimo_ts", 0), reverse=True)
-    canales = sorted(resumen.values(), key=lambda c: c["total"], reverse=True)
+    # Orden estable (por número): las pestañas no deben saltar de lugar cuando entra
+    # una conversación y un canal pasa al otro en cantidad.
+    canales = sorted(resumen.values(), key=lambda c: c["canal"])
     return {"total": len(chats), "chats": chats, "canales": canales}
 
 
@@ -624,21 +636,63 @@ async def api_responder_audio(
 
 # --------------------------------------------------------- config bot ---
 @panel_router.get("/api/config")
-async def api_config_get(x_panel_token: str | None = Header(default=None)) -> dict:
+async def api_config_get(
+    canal: str = "", x_panel_token: str | None = Header(default=None)
+) -> dict:
+    """Config EFECTIVA del canal elegido (común + lo propio de ese número).
+
+    `propios` dice qué campos tiene personalizados ese canal, para que el panel
+    marque cuáles ya no siguen al común.
+    """
     _auth(x_panel_token)
-    return config_as_dict(await load_config(force=True))
+    c = canal_id(canal)
+    cfg = config_as_dict(await load_config(c, force=True))
+    propios = await overrides_de_canal(c) if c else {}
+    return {**cfg, "_canal": c, "_propios": sorted(propios.keys())}
 
 
 @panel_router.post("/api/config")
 async def api_config_set(
-    request: Request, x_panel_token: str | None = Header(default=None)
+    request: Request, canal: str = "", x_panel_token: str | None = Header(default=None)
 ) -> dict:
+    """Guarda la config. Con `canal` toca SÓLO ese número; con `ambos: true`, los dos."""
     _auth(x_panel_token)
     data = await request.json()
     if not isinstance(data, dict):
         raise HTTPException(status_code=400, detail="se esperaba objeto JSON")
-    await save_config(data)
-    await events.publicar("control", "-", detalle="config de negocio actualizada")
+    ambos = bool(data.pop("_ambos", False))
+    c = canal_id(canal)
+    antes = set(await canales_configurados())
+    await save_config(data, canal=c, ambos=ambos)
+    # Si se agregó/quitó un número, los caches por canal (prompts, conocimiento,
+    # agentes) tienen que aprender el canal nuevo YA: si no, el número recién dado de
+    # alta atendería con lo común hasta el próximo reinicio.
+    if set(await canales_configurados()) != antes:
+        await prompt_store.cargar()
+        await conocimiento.cargar()
+        await agentes_custom.cargar()
+    donde = "los dos números" if (ambos or not c) else nombre_canal(c)
+    await events.publicar(
+        "control", "-", emisor=c,
+        detalle=f"config de negocio actualizada ({donde})",
+    )
+    return {"ok": True, "canal": c, "ambos": ambos or not c}
+
+
+@panel_router.delete("/api/config")
+async def api_config_reset(
+    canal: str = "", x_panel_token: str | None = Header(default=None)
+) -> dict:
+    """Este canal vuelve a heredar la config común (borra lo propio)."""
+    _auth(x_panel_token)
+    c = canal_id(canal)
+    if not c:
+        raise HTTPException(status_code=400, detail="indicá el canal a resetear")
+    await resetear_canal(c)
+    await events.publicar(
+        "control", "-", emisor=c,
+        detalle=f"config de {nombre_canal(c)} vuelve a la común",
+    )
     return {"ok": True}
 
 
@@ -650,57 +704,89 @@ async def api_anuncios(x_panel_token: str | None = Header(default=None)) -> dict
 
 # ------------------------------------------------------ prompts por agente ---
 @panel_router.get("/api/prompts")
-async def api_prompts_get(x_panel_token: str | None = Header(default=None)) -> dict:
+async def api_prompts_get(
+    canal: str = "", x_panel_token: str | None = Header(default=None)
+) -> dict:
+    """Prompts VIGENTES en ese canal, más de dónde sale cada uno.
+
+    `origen`: 'canal' (propio de este número), 'comun' (los dos) o 'base' (el .md).
+    """
     _auth(x_panel_token)
+    c = canal_id(canal)
     todos = prompt_store.agentes()
     return {
+        "canal": c,
         "agentes": list(todos),
         "prompts": {
             a: {
                 "base": prompt_store.get_base(a),
-                "override": prompt_store.get_prompt(a) if prompt_store.usando_override(a) else "",
-                "usando_override": prompt_store.usando_override(a),
+                "override": (
+                    prompt_store.get_prompt(a, c)
+                    if prompt_store.usando_override(a, c) else ""
+                ),
+                "usando_override": prompt_store.usando_override(a, c),
+                "origen": prompt_store.origen(a, c),
+                # El común, para poder comparar contra lo propio del canal.
+                "comun": prompt_store.get_prompt(a, COMUN),
             }
             for a in todos
         },
-        # Agentes creados desde el panel (con sus herramientas y palabras clave).
-        "personalizados": agentes_custom.listar(),
+        # Agentes que atienden en ESTE canal (propios del número + comunes).
+        "personalizados": agentes_custom.listar(c),
         "packs": agentes_custom.PACKS,
     }
 
 
 @panel_router.post("/api/prompts/{agente}")
 async def api_prompt_set(
-    agente: str, request: Request, x_panel_token: str | None = Header(default=None)
+    agente: str,
+    request: Request,
+    canal: str = "",
+    x_panel_token: str | None = Header(default=None),
 ) -> dict:
+    """Guarda el prompt. Con `canal` sólo para ese número; con `ambos: true`, los dos."""
     _auth(x_panel_token)
     if agente not in prompt_store.agentes():
         raise HTTPException(status_code=404, detail=f"agente desconocido: {agente}")
     data = await request.json()
     texto = str(data.get("override", ""))
+    ambos = bool(data.get("ambos", False))
+    c = canal_id(canal)
     if texto.strip() and len(texto.strip()) < 40:
         raise HTTPException(
             status_code=400,
             detail="prompt demasiado corto; podría romper el agente. Mínimo 40 caracteres, o vacío para volver al .md base.",
         )
-    await prompt_store.guardar(agente, texto)
+    await prompt_store.guardar(agente, texto, canal=c, ambos=ambos)
+    donde = "los dos números" if (ambos or not c) else nombre_canal(c)
     await events.publicar(
-        "control", "-",
-        detalle=f"prompt '{agente}' {'guardado' if texto.strip() else 'restaurado al base'}",
+        "control", "-", emisor=c,
+        detalle=(
+            f"prompt '{agente}' "
+            f"{'guardado' if texto.strip() else 'restaurado al base'} ({donde})"
+        ),
     )
-    return {"ok": True, "agente": agente, "usando_override": prompt_store.usando_override(agente)}
+    return {
+        "ok": True,
+        "agente": agente,
+        "canal": c,
+        "usando_override": prompt_store.usando_override(agente, c),
+        "origen": prompt_store.origen(agente, c),
+    }
 
 
 # ------------------------------------------- agentes creados desde el panel ---
 @panel_router.post("/api/agentes")
 async def api_agente_crear(
-    request: Request, x_panel_token: str | None = Header(default=None)
+    request: Request, canal: str = "", x_panel_token: str | None = Header(default=None)
 ) -> dict:
     """Crea (o actualiza) un agente PERSONALIZADO que de verdad atiende turnos.
 
-    Body: {nombre, descripcion, herramientas:[...], palabras:[...], modelo, prompt}
+    Body: {nombre, descripcion, herramientas:[...], palabras:[...], modelo, prompt, ambos}
     El prompt se guarda con prompt_store (igual que los agentes base), así que se
     puede editar o subir un .md después desde la misma pantalla.
+
+    Con `canal` el agente atiende SÓLO ese número; con `ambos: true`, los dos.
     """
     _auth(x_panel_token)
     data = await request.json()
@@ -708,6 +794,8 @@ async def api_agente_crear(
     prompt = str(data.get("prompt", "") or "")
     herramientas = data.get("herramientas") or []
     palabras = data.get("palabras") or []
+    ambos = bool(data.get("ambos", False))
+    c = canal_id(canal)
     if isinstance(palabras, str):
         palabras = [p for p in palabras.split(",")]
     if len(prompt.strip()) < 40:
@@ -723,76 +811,105 @@ async def api_agente_crear(
             herramientas=list(herramientas),
             palabras=list(palabras),
             modelo=str(data.get("modelo", "mini")),
+            canal=c,
+            ambos=ambos,
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
-    await prompt_store.guardar(nombre, prompt)
+    await prompt_store.guardar(nombre, prompt, canal=c, ambos=ambos)
+    donde = "los dos números" if (ambos or not c) else nombre_canal(c)
     await events.publicar(
-        "control", "-", detalle=f"agente '{nombre}' creado/actualizado desde el panel",
+        "control", "-", emisor=c,
+        detalle=f"agente '{nombre}' creado/actualizado desde el panel ({donde})",
     )
     return {"ok": True, "agente": cfg}
 
 
 @panel_router.delete("/api/agentes/{nombre}")
 async def api_agente_borrar(
-    nombre: str, x_panel_token: str | None = Header(default=None)
+    nombre: str, canal: str = "", x_panel_token: str | None = Header(default=None)
 ) -> dict:
     _auth(x_panel_token)
-    ok = await agentes_custom.borrar(nombre)
+    c = canal_id(canal)
+    ok = await agentes_custom.borrar(nombre, canal=c)
     if not ok:
         raise HTTPException(status_code=404, detail=f"no existe el agente '{nombre}'")
-    await events.publicar("control", "-", detalle=f"agente '{nombre}' eliminado")
+    await events.publicar(
+        "control", "-", emisor=c, detalle=f"agente '{nombre}' eliminado",
+    )
     return {"ok": True}
 
 
 # ------------------------------------------------------------ revisión ---
 @panel_router.get("/api/revision")
 async def api_revision(
-    limite: int = 50, x_panel_token: str | None = Header(default=None)
+    limite: int = 50, canal: str = "", x_panel_token: str | None = Header(default=None)
 ) -> dict:
+    """Cola de revisión; con `canal`, sólo los casos de ese número."""
     _auth(x_panel_token)
     items = await listar_revision(limite)
+    c = canal_id(canal)
+    if c:
+        meta = await events.todos_chatmeta()
+        items = [
+            i for i in items
+            if canal_id(str((meta.get(str(i.get("chat_id", ""))) or {}).get("emisor", "")))
+            == c
+        ]
     return {"total": len(items), "items": items}
 
 
 # --------------------------------------------------- mejora continua ---
 @panel_router.get("/api/aprendizaje")
-async def api_aprendizaje(x_panel_token: str | None = Header(default=None)) -> dict:
+async def api_aprendizaje(
+    canal: str = "", x_panel_token: str | None = Header(default=None)
+) -> dict:
+    """Lo que aplica a ese canal: sus reglas/correcciones propias + las comunes.
+
+    Cada ítem trae `canal` ("" = común a los dos números) para que el panel lo marque.
+    """
     _auth(x_panel_token)
+    c = canal_id(canal)
     return {
-        "reglas": await conocimiento.list_reglas(),
-        "correcciones": await conocimiento.list_correcciones(),
-        "sugerencias": await conocimiento.list_sugerencias(),
+        "canal": c,
+        "reglas": await conocimiento.list_reglas(c),
+        "correcciones": await conocimiento.list_correcciones(c),
+        "sugerencias": await conocimiento.list_sugerencias(canal=c),
     }
 
 
 @panel_router.post("/api/reglas")
 async def api_regla_add(
-    request: Request, x_panel_token: str | None = Header(default=None)
+    request: Request, canal: str = "", x_panel_token: str | None = Header(default=None)
 ) -> dict:
     _auth(x_panel_token)
     data = await request.json()
     texto = str(data.get("texto", "")).strip()
     if len(texto) < 5:
         raise HTTPException(status_code=400, detail="regla demasiado corta")
-    r = await conocimiento.add_regla(texto)
-    await events.publicar("control", "-", detalle=f"regla agregada: {texto[:80]}")
+    c = canal_id(canal)
+    ambos = bool(data.get("ambos", False))
+    r = await conocimiento.add_regla(texto, canal=c, ambos=ambos)
+    donde = "los dos números" if (ambos or not c) else nombre_canal(c)
+    await events.publicar(
+        "control", "-", emisor=c, detalle=f"regla agregada ({donde}): {texto[:80]}",
+    )
     return {"ok": True, "regla": r}
 
 
 @panel_router.delete("/api/reglas/{rid}")
 async def api_regla_del(
-    rid: int, x_panel_token: str | None = Header(default=None)
+    rid: int, canal: str = "", x_panel_token: str | None = Header(default=None)
 ) -> dict:
     _auth(x_panel_token)
-    await conocimiento.del_regla(rid)
+    await conocimiento.del_regla(rid, canal=canal_id(canal))
     return {"ok": True}
 
 
 @panel_router.post("/api/correcciones")
 async def api_correccion_add(
-    request: Request, x_panel_token: str | None = Header(default=None)
+    request: Request, canal: str = "", x_panel_token: str | None = Header(default=None)
 ) -> dict:
     _auth(x_panel_token)
     data = await request.json()
@@ -800,26 +917,40 @@ async def api_correccion_add(
     respuesta = str(data.get("respuesta_correcta", "")).strip()
     if not situacion or not respuesta:
         raise HTTPException(status_code=400, detail="situacion y respuesta_correcta requeridas")
+    canal_efectivo = canal_id(canal)
+    chat_id = str(data.get("chat_id", ""))
+    # Si la corrección salió de una conversación, el canal es el de ESA conversación.
+    if chat_id:
+        emisor = (await events.leer_chatmeta(chat_id)).get("emisor", "")
+        canal_efectivo = canal_id(emisor) or canal_efectivo
     c = await conocimiento.add_correccion(
-        situacion, respuesta, str(data.get("motivo", "")), str(data.get("chat_id", ""))
+        situacion, respuesta, str(data.get("motivo", "")), chat_id,
+        canal=canal_efectivo, ambos=bool(data.get("ambos", False)),
     )
-    await events.publicar("control", data.get("chat_id", "-"), detalle="corrección aprendida")
+    await events.publicar(
+        "control", chat_id or "-", emisor=canal_efectivo, detalle="corrección aprendida",
+    )
     return {"ok": True, "correccion": c}
 
 
 @panel_router.delete("/api/correcciones/{cid}")
 async def api_correccion_del(
-    cid: int, x_panel_token: str | None = Header(default=None)
+    cid: int, canal: str = "", x_panel_token: str | None = Header(default=None)
 ) -> dict:
     _auth(x_panel_token)
-    await conocimiento.del_correccion(cid)
+    await conocimiento.del_correccion(cid, canal=canal_id(canal))
     return {"ok": True}
 
 
 @panel_router.post("/api/sugerencias/analizar")
-async def api_analizar(x_panel_token: str | None = Header(default=None)) -> dict:
+async def api_analizar(
+    canal: str = "", x_panel_token: str | None = Header(default=None)
+) -> dict:
+    """Analiza los casos de ese canal (sin canal, todos, por separado)."""
     _auth(x_panel_token)
-    resultado = await analizar_y_sugerir(auto_aplicar_bajo_riesgo=False)
+    resultado = await analizar_y_sugerir(
+        auto_aplicar_bajo_riesgo=False, canal=canal_id(canal)
+    )
     return {"ok": True, **resultado}
 
 

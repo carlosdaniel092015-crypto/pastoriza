@@ -25,6 +25,7 @@ from app.media import convertir_a_jpg, descargar
 
 from app import canario, version
 from app.business_config import (
+    canales_configurados,
     config_as_dict,
     listar_anuncios,
     load_config,
@@ -111,6 +112,37 @@ async def _loop_canario() -> None:
             log.error("canario_fallo", error=str(exc))
 
 
+async def _revisar_canales() -> None:
+    """Avisa si la configuración de los DOS números no puede funcionar.
+
+    `YCLOUD_FROM` fija a la fuerza el número emisor: con dos canales eso haría que
+    todo salga por uno solo y que las conversaciones del otro se registren en el
+    canal equivocado. Es un error de configuración silencioso, así que se grita.
+    """
+    try:
+        canales = await canales_configurados()
+    except Exception as exc:  # noqa: BLE001
+        log.warning("canales_no_leidos", error=str(exc))
+        return
+    log.info("canales_configurados", canales=list(canales), total=len(canales))
+    if len(canales) > 1 and settings.ycloud_from:
+        log.error(
+            "ycloud_from_fijo_con_varios_canales",
+            ycloud_from=settings.ycloud_from,
+            canales=list(canales),
+            detalle=(
+                "YCLOUD_FROM fuerza un solo número emisor: dejala VACÍA para que el "
+                "bot responda por el mismo número por el que le escribieron."
+            ),
+        )
+        with contextlib.suppress(Exception):
+            await telegram.enviar(
+                "⚠️ <b>Configuración</b>: hay 2 canales configurados pero "
+                f"<code>YCLOUD_FROM={settings.ycloud_from}</code> fuerza uno solo. "
+                "Dejala vacía para que cada número responda por sí mismo."
+            )
+
+
 @contextlib.asynccontextmanager
 async def lifespan(app: FastAPI):
     log.info(
@@ -125,6 +157,7 @@ async def lifespan(app: FastAPI):
     await agentes_custom.cargar()
     await prompt_store.cargar()
     await conocimiento.cargar()
+    await _revisar_canales()
 
     tareas: list[asyncio.Task] = []
     if settings.analista_auto:

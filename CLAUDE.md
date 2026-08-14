@@ -13,7 +13,7 @@ Entorno **Windows**; hay `Makefile` pero en Windows conviene invocar el venv dir
 
 ```bash
 # venv (Python 3.12)
-./.venv/Scripts/python.exe -m pytest -q                          # toda la suite (149 tests)
+./.venv/Scripts/python.exe -m pytest -q                          # toda la suite (266 tests)
 ./.venv/Scripts/python.exe -m pytest tests/test_enrutador.py -q  # un archivo
 ./.venv/Scripts/python.exe -m pytest tests/test_seguridad.py::TestNoInventarFotos -q  # una clase/test
 
@@ -28,7 +28,8 @@ PYTHONUTF8=1 ./.venv/Scripts/python.exe -m scripts.indexar_fichas
 ```
 
 Los tests corren **sin `.env`, sin Redis, sin Odoo** (`tests/conftest.py` fija claves dummy y
-solo cubren lógica pura: enrutado, matching, cotización, saneo, entrega, repetición, prompts).
+solo cubren lógica pura: enrutado, matching, cotización, saneo, entrega, repetición, prompts,
+separación por canal; el panel se prueba con TestClient + `tests/fake_redis.py`).
 
 ## Arquitectura en 30 segundos
 
@@ -57,6 +58,17 @@ panel (override en Redis). Ver `app/agents/base.py:armar_instrucciones`.
 (sesión 24h, pausas, debounce, eventos, conocimiento); código/`.env` = secretos y reglas duras.
 Config de **negocio** editable en Redis (`app/business_config.py`) ≠ config de **entorno**
 (`app/settings.py`).
+
+**DOS CANALES (`app/canales.py`, ADR-011):** el bot atiende dos números de YCloud (uno
+coexistente con la app de WhatsApp) y **cada uno es individual**. Canal = número NUESTRO por el
+que entró el mensaje (`ctx.emisor`), normalizado a sus últimos 10 dígitos. Todo lo configurable
+vive en dos niveles: `pastoriza:algo` (COMÚN, heredado) y `pastoriza:algo:c:<canal>` (PROPIO,
+gana). Aplica a config, prompts (`prompt_store`), reglas/correcciones (`conocimiento`) y agentes
+personalizados (`agentes_custom`); todas esas funciones toman `canal=` y las de escritura,
+`ambos=True` (única forma de tocar el otro número). `armar_instrucciones` lee `ctx.emisor`, así
+que un mismo Agent sirve a los dos. Si agregás algo configurable, seguí ese patrón o el panel
+mentirá. `YCLOUD_FROM` **debe quedar vacía** con dos números (si no, todo sale por uno solo; se
+avisa al arrancar). Sigue compartido por chat_id: sesión/historial, pausa 30 min y debounce.
 
 **Panel de operación** (`app/panel/`, servido en `/panel`, protegido con `PANEL_TOKEN`): CRM en
 vivo, alertas, config, prompts por-agente, aprendizaje, kill-switch global. La UI es una SPA

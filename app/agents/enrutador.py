@@ -81,12 +81,15 @@ def senales_humano(texto: str) -> bool:
     return bool(RE_PIDE_HUMANO.search(n) or RE_AMERITA_HUMANO.search(n))
 
 
-def ruta_personalizada(texto: str) -> str | None:
+def ruta_personalizada(texto: str, canal: str = "") -> str | None:
     """Enrutado a un agente PERSONALIZADO por sus palabras clave (0 tokens).
 
     Se consulta DESPUÉS de reclamos/cancelaciones (esas mandan a soporte siempre) y
     ANTES de las reglas genéricas de ventas/pedido, para que un agente creado en el
     panel pueda capturar su nicho (ej. "al por mayor" -> agente mayorista).
+
+    Sólo se consideran los agentes que atienden EN ESE CANAL (los propios del número
+    más los comunes): uno creado para el 6701 no captura conversaciones del 1092.
     """
     from app.panel import agentes_custom
 
@@ -94,7 +97,7 @@ def ruta_personalizada(texto: str) -> str | None:
     if not n:
         return None
     mejor: tuple[int, str] | None = None
-    for cfg in agentes_custom.listar():
+    for cfg in agentes_custom.listar(canal):
         if not cfg.get("activo", True):
             continue
         for palabra in cfg.get("palabras", []):
@@ -107,7 +110,10 @@ def ruta_personalizada(texto: str) -> str | None:
 
 
 def ruta_deterministica(
-    texto: str, es_comprobante: bool = False, tiene_imagen: bool = False
+    texto: str,
+    es_comprobante: bool = False,
+    tiene_imagen: bool = False,
+    canal: str = "",
 ) -> str | None:
     """Enrutado SIN LLM (0 tokens). Devuelve el agente, o None si es ambiguo.
 
@@ -123,7 +129,7 @@ def ruta_deterministica(
     if RE_SOPORTE.search(n):
         return "soporte"
     # 2b. Agentes PERSONALIZADOS del panel: capturan su nicho por palabras clave.
-    custom = ruta_personalizada(n)
+    custom = ruta_personalizada(n, canal)
     if custom:
         return custom
     # 3. Señales claras de cierre -> pedido.
@@ -152,11 +158,13 @@ async def analizar_contexto(texto: str, ctx, session=None) -> Veredicto:
     Determinista primero (0 tokens); el modelo mini sólo entra ante duda, y en ese
     caso resuelve agente + escalada en UNA sola llamada (la que ya se hacía).
     """
+    canal = str(getattr(ctx, "emisor", "") or "")
     explicito = senales_humano(texto)
     ruta = ruta_deterministica(
         texto,
         es_comprobante=bool(getattr(ctx, "es_comprobante", False)),
         tiene_imagen=bool(getattr(ctx, "imagen_url", "")),
+        canal=canal,
     )
     if ruta:
         return Veredicto(
@@ -168,7 +176,7 @@ async def analizar_contexto(texto: str, ctx, session=None) -> Veredicto:
         # Pide una persona / reclamo claro, pero la ruta no era obvia: a soporte.
         return Veredicto(agente="soporte", permite_escalar=True, motivo="senal_explicita")
     # Ambiguo -> el determinador con IA mira la conversación reciente.
-    return await _determinar(texto, session)
+    return await _determinar(texto, session, canal)
 
 
 INSTR_DETERMINADOR = """Además de elegir el agente, decide si el caso amerita una PERSONA.
@@ -181,7 +189,7 @@ disponibilidad, fotos y pedidos. Eso lo resuelve el bot.
 Responde SOLO este JSON: {"agente":"ventas|pedido|soporte","amerita_humano":true|false,"motivo":"3 palabras"}"""
 
 
-async def _determinar(texto: str, session=None) -> Veredicto:
+async def _determinar(texto: str, session=None, canal: str = "") -> Veredicto:
     """Determinador con IA: agente + si amerita humano, mirando la conversación."""
     from app.panel.prompt_store import get_prompt
 
@@ -201,7 +209,7 @@ async def _determinar(texto: str, session=None) -> Veredicto:
 
     extra = ""
     validos = set(VALIDOS)
-    customs = [c for c in agentes_custom.listar() if c.get("activo", True)]
+    customs = [c for c in agentes_custom.listar(canal) if c.get("activo", True)]
     if customs:
         extra = "\nAgentes adicionales disponibles:\n" + "\n".join(
             f'- {c["nombre"]}: {c.get("descripcion") or "sin descripcion"}'
@@ -219,7 +227,7 @@ async def _determinar(texto: str, session=None) -> Veredicto:
                 {
                     "role": "system",
                     "content": (
-                        get_prompt("enrutador") + "\n\n" + INSTR_DETERMINADOR + extra
+                        get_prompt("enrutador", canal) + "\n\n" + INSTR_DETERMINADOR + extra
                     ),
                 },
                 {
