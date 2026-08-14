@@ -7,6 +7,7 @@ del nodo `Load Config3`.
 from __future__ import annotations
 
 import json
+import re
 import time
 from dataclasses import asdict, dataclass, fields
 
@@ -24,6 +25,38 @@ def get_redis():
 
 
 CONFIG_KEY = "pastoriza:config"  # key literal, compartida con el panel/n8n
+
+
+# ------------------------------------------------------------------ canales ---
+# El bot atiende DOS números (canales de YCloud) y el panel se divide por canal.
+# El canal de una conversación es el número NUESTRO por el que entró (el `emisor`).
+def norm_num(numero: str) -> str:
+    """Deja sólo dígitos y toma los últimos 10: compara +1 809..., 1809..., 809..."""
+    d = re.sub(r"\D", "", str(numero or ""))
+    return d[-10:] if len(d) >= 10 else d
+
+
+def parsear_canales(texto: str) -> dict[str, str]:
+    """"18099221092 = Ventas" (uno por línea o separados por coma) -> {num: nombre}."""
+    out: dict[str, str] = {}
+    for linea in re.split(r"[\n,;]+", str(texto or "")):
+        if "=" not in linea:
+            continue
+        num, nombre = linea.split("=", 1)
+        num, nombre = norm_num(num), nombre.strip()
+        if num and nombre:
+            out[num] = nombre[:40]
+    return out
+
+
+def nombre_canal(emisor: str, mapa: dict[str, str] | None = None) -> str:
+    """Nombre para mostrar: el que puso el operador, o el número formateado."""
+    n = norm_num(emisor)
+    if not n:
+        return "Sin canal"
+    if mapa and n in mapa:
+        return mapa[n]
+    return f"{n[0:3]}-{n[3:6]}-{n[6:]}" if len(n) == 10 else n
 ADS_MAP_KEY = "pastoriza:ads_map"  # hash: ad_id -> JSON {product_tmpl_id, nombre}
 
 
@@ -63,6 +96,10 @@ class BusinessConfig:
     )
     formas_pago: str = "Tarjetas de credito, transferencia, depositos y pago en efectivo"
     contra_entrega: str = "No"  # ¿se acepta pago contra entrega? No
+    # Nombres de los canales (números de YCloud) para el panel. Formato:
+    # "18099221092 = Tienda" (uno por línea o separados por coma). Sin nombre se
+    # muestra el número formateado. Sólo afecta cómo se VE el panel.
+    canales: str = "18099221092 = 809-922-1092\n18294716701 = 829-471-6701"
     # Venta por fardo (OPCIONAL: dejar vacío hasta que el cliente confirme los datos)
     fardo_cantidad: str = ""  # unidades por fardo
     fardo_envio_minimo: str = ""  # envío mínimo por fardo

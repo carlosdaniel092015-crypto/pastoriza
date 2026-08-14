@@ -29,6 +29,9 @@ from app.business_config import (
     config_as_dict,
     listar_anuncios,
     load_config,
+    nombre_canal,
+    norm_num,
+    parsear_canales,
     save_config,
 )
 from app.catalogo import catalogo
@@ -217,6 +220,9 @@ async def api_chats(x_panel_token: str | None = Header(default=None)) -> dict:
     _auth(x_panel_token)
     meta = await events.todos_chatmeta()
     ids = set(meta.keys()) | set(await _chat_ids_de_sesiones())
+    # Nombres de los canales (números de YCloud) para mostrar en el panel.
+    mapa_canales = parsear_canales((await load_config()).canales)
+    resumen: dict[str, dict] = {}
     chats = []
     for cid in ids:
         m = meta.get(cid, {})
@@ -228,6 +234,9 @@ async def api_chats(x_panel_token: str | None = Header(default=None)) -> dict:
             # lo deducimos del historial para que la lista sea correcta YA, sin
             # esperar a que llegue un mensaje nuevo.
             ultimo, ultimo_de = await _ultimo_del_historial(cid, ultimo)
+        # Canal = número NUESTRO por el que entró la conversación.
+        emisor = str(m.get("emisor") or "")
+        canal_id = norm_num(emisor)
         chats.append(
             {
                 "chat_id": cid,
@@ -237,10 +246,25 @@ async def api_chats(x_panel_token: str | None = Header(default=None)) -> dict:
                 "ultimo_de": ultimo_de or "cliente",
                 "ultimo_ts": m.get("ultimo_ts", 0),
                 "pausado": pausado,
+                "canal": canal_id,
+                "canal_nombre": nombre_canal(emisor, mapa_canales),
             }
         )
+        r = resumen.setdefault(
+            canal_id,
+            {"canal": canal_id, "nombre": nombre_canal(emisor, mapa_canales),
+             "total": 0, "esperando": 0, "en_asesor": 0},
+        )
+        r["total"] += 1
+        if pausado:
+            r["en_asesor"] += 1
+        elif (ultimo_de or "cliente") == "cliente":
+            # El cliente escribió y nadie contestó todavía.
+            r["esperando"] += 1
+
     chats.sort(key=lambda c: c.get("ultimo_ts", 0), reverse=True)
-    return {"total": len(chats), "chats": chats}
+    canales = sorted(resumen.values(), key=lambda c: c["total"], reverse=True)
+    return {"total": len(chats), "chats": chats, "canales": canales}
 
 
 @panel_router.get("/api/chats/{chat_id}")
