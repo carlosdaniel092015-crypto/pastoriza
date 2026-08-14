@@ -574,13 +574,19 @@ let _chatsSig='';
 // El panel se divide por canal: cada número tiene sus conversaciones. La elección
 // se recuerda, así que si atendés siempre uno, entrás y ya está filtrado.
 let CANALES=[], canalSel=localStorage.getItem('panel_canal')||'';
+// "-" = conversaciones sin número asignado (entraron antes de que el bot guardara el
+// emisor). Es una pestaña más, pero NO es un canal configurable.
+const SIN_CANAL='-';
+function esCanalReal(){ return !!canalSel && canalSel!==SIN_CANAL; }
 function chatsDelCanal(){ return canalSel ? chatsCache.filter(c=>(c.canal||'')===canalSel) : chatsCache; }
 function eventoDelCanal(e){ if(!canalSel) return true;
-  const n=String(e.emisor||'').replace(/\D/g,'').slice(-10); return n===canalSel; }
+  const n=String(e.emisor||'').replace(/\D/g,'').slice(-10);
+  return canalSel===SIN_CANAL ? !n : n===canalSel; }
 function nombreCanalSel(){ const c=CANALES.find(x=>x.canal===canalSel); return c?c.nombre:'Todos los canales'; }
 // Toda llamada al API lleva el canal elegido: config, prompts, reglas, revisión y
 // análisis responden POR CANAL, así cambiar de pestaña cambia TODO, no sólo la lista.
-function conCanal(path){ if(!canalSel) return path;
+// "Sin canal" no es un número: ahí se ve/edita lo COMÚN (no se manda `canal`).
+function conCanal(path){ if(!esCanalReal()) return path;
   return path+(path.includes('?')?'&':'?')+'canal='+encodeURIComponent(canalSel); }
 function apiC(path,opt){ return api(conCanal(path),opt); }
 // Caché por (ruta + canal) para que cambiar de módulo o de número PINTE YA con lo
@@ -628,11 +634,11 @@ function marcarComun(){
       // Después del título y el subtítulo, antes del contenido.
       const ref=pane.querySelector('.sub'); if(ref&&ref.nextSibling)pane.insertBefore(av,ref.nextSibling); else pane.insertBefore(av,pane.firstChild); }
     const chk=CHK_AMBOS[v];
-    if(canalSel){
+    if(esCanalReal()){
       av.innerHTML='Estás editando <b>'+esc(nombreCanalSel())+'</b>. Lo que guardes acá aplica <b>sólo a ese número</b>; el otro sigue igual.'+
         '<span class="sp"></span><label title="Guardar el mismo valor en los dos números"><input type="checkbox" id="'+chk+'"/> Aplicar a los dos números</label>';
     } else {
-      av.innerHTML='Estás en <b>Todos los canales</b>: acá se edita '+qué+' <b>común</b>, la que heredan los dos números.'+
+      av.innerHTML='Estás en <b>'+(canalSel===SIN_CANAL?'Sin canal':'Todos los canales')+'</b>: acá se edita '+qué+' <b>común</b>, la que heredan los dos números.'+
         '<span class="sp"></span><label class="meta">Elegí un número arriba para configurarlo aparte.</label>';
     }
   }
@@ -658,7 +664,9 @@ function renderChats(){
         '<button class="btn sec sm" style="margin-top:8px" onclick="loadChats()">Reintentar</button></div>'
       : '<div class="empty">'+(canalSel?'Este canal no tiene conversaciones.':'Sin conversaciones aún.')+'</div>';
     return; }
-  el.innerHTML=lista.map(c=>{
+  // "Sin canal": conversaciones anteriores a que el bot guardara por qué número
+  // entraron. No se puede adivinar (el dato no existe), pero sí asignarlas de una vez.
+  el.innerHTML = (canalSel===SIN_CANAL ? avisoSinCanal(lista.length) : '') + lista.map(c=>{
     const nombre=c.user_name||c.chat_id;
     const dot=c.pausado?'<span class="adot" title="en control humano"></span>':'';
     const tag=esTest(c.chat_id)?'<span class="ttag">PRUEBA</span>':'';
@@ -669,6 +677,25 @@ function renderChats(){
       <div class="m">${quienDijo(c.ultimo_de)}${esc(c.ultimo)||'—'}${cch}</div></button>`;
   }).join('');
 }
+function avisoSinCanal(n){
+  const nums=CANALES.filter(c=>c.canal&&c.canal!==SIN_CANAL);
+  if(!nums.length) return '';
+  return '<div class="comun" style="margin:10px;display:block">'+
+    '<b>'+n+' conversación(es) sin número.</b> Entraron antes de que el bot guardara '+
+    'por qué número llegó cada una, así que no se puede saber solo. Desde el próximo '+
+    'mensaje cada una queda en su canal sola; si querés moverlas ya, elegí a cuál:'+
+    '<div style="margin-top:8px;display:flex;gap:6px;flex-wrap:wrap">'+
+    nums.map(c=>'<button class="btn sec sm" onclick="asignarCanal(\''+c.canal+'\')">Asignar a '+esc(c.nombre)+'</button>').join('')+
+    '</div></div>';
+}
+async function asignarCanal(canal){
+  const c=CANALES.find(x=>x.canal===canal); const nombre=c?c.nombre:canal;
+  if(!confirm('¿Mandar TODAS las conversaciones sin número a '+nombre+'?\n\nEs sólo cómo se agrupan en el panel: no le escribe nada a ningún cliente.'))return;
+  try{ const d=await api('/chats/asignar-canal?canal='+encodeURIComponent(canal),{method:'POST'});
+    canalSel=canal; localStorage.setItem('panel_canal',canal); _chatsSig='';
+    await loadChats();
+    showToast('order','✓ Conversaciones asignadas',(d.asignadas||0)+' ahora están en '+nombre);
+  }catch(e){ alert('No se pudo asignar: '+e); } }
 function abrirVistaHilo(){ const c=document.querySelector('.conv'); if(c)c.classList.add('show-thread'); document.body.classList.add('thread-open'); }
 function cerrarHilo(){ const c=document.querySelector('.conv'); if(c)c.classList.remove('show-thread'); document.body.classList.remove('thread-open'); }
 async function openChat(id){
@@ -850,7 +877,7 @@ function pintarCfg(d){ cfgDirty=0;
   cfgPropios=d._propios||[];
   // En "Todos" se edita la común: hay que decir qué número NO va a ver el cambio
   // porque tiene ese campo personalizado.
-  if(!canalSel) avisoPropios(d._propios_por_canal||{});
+  if(!esCanalReal()) avisoPropios(d._propios_por_canal||{});
   $('#cfg').innerHTML=GRUPOS.map(g=>`<div class="group"><h3>${g.t}</h3><div class="gsub">${g.s}</div><div class="grid">`+g.campos.map(k=>{const v=esc(String(d[k]!=null?d[k]:''));
     const hint=HINTS[k]?`<span class="hint">${HINTS[k]}</span>`:'';
     // `esprop`: este campo ya tiene un valor PROPIO de este número (no sigue al común).
@@ -860,8 +887,8 @@ function pintarCfg(d){ cfgDirty=0;
     return `<div class="fld${pr}" ${long?'style="grid-column:1/-1"':''}><label>${LBL[k]||k}</label>${long?`<textarea id="cfg_${k}" style="min-height:70px" oninput="cfgTouch()">${v}</textarea>`:`<input id="cfg_${k}" value="${v}" oninput="cfgTouch()"/>`}${hint}</div>`;
   }).join('')+`</div></div>`).join('');
   // Volver a heredar la común: sólo tiene sentido dentro de un canal con valores propios.
-  const rb=$('#cfgreset'); if(rb) rb.style.display=(canalSel&&cfgPropios.length)?'inline-flex':'none';
-  $('#cfgmsg').textContent=canalSel
+  const rb=$('#cfgreset'); if(rb) rb.style.display=(esCanalReal()&&cfgPropios.length)?'inline-flex':'none';
+  $('#cfgmsg').textContent=esCanalReal()
     ? (cfgPropios.length?cfgPropios.length+' campo(s) propios de este número.':'Este número hereda la config común.')
     : 'Sin cambios sin guardar.'; }
 function avisoPropios(mapa){ const sec=$('#v-config'); if(!sec)return;
@@ -873,12 +900,12 @@ function avisoPropios(mapa){ const sec=$('#v-config'); if(!sec)return;
 function cfgTouch(){ cfgDirty++; $('#cfgmsg').innerHTML='<span class="warn">'+cfgDirty+' cambio(s) sin guardar</span>'; }
 async function saveCfg(){ const data={}; document.querySelectorAll('[id^=cfg_]').forEach(i=>data[i.id.slice(4)]=i.value);
   data._ambos=ambosDe('config');
-  if(canalSel&&data._ambos&&!confirm('¿Aplicar esta configuración a los DOS números? Se reemplaza también la del otro canal.'))return;
+  if(esCanalReal()&&data._ambos&&!confirm('¿Aplicar esta configuración a los DOS números? Se reemplaza también la del otro canal.'))return;
   await apiC('/config',{method:'POST',body:JSON.stringify(data)}); cfgDirty=0;
   olvidar('/config');  // el cambio puede afectar al otro número: se recarga de verdad
-  $('#cfgmsg').innerHTML='<span class="ok">Guardado ✓ '+(data._ambos||!canalSel?'(los dos números)':'(sólo '+esc(nombreCanalSel())+')')+'</span>';
+  $('#cfgmsg').innerHTML='<span class="ok">Guardado ✓ '+(data._ambos||!esCanalReal()?'(los dos números)':'(sólo '+esc(nombreCanalSel())+')')+'</span>';
   await loadCfg(); }
-async function resetCfg(){ if(!canalSel)return;
+async function resetCfg(){ if(!esCanalReal())return;
   if(!confirm('¿Que '+nombreCanalSel()+' vuelva a usar la configuración común? Se borran sus valores propios.'))return;
   await apiC('/config',{method:'DELETE'}); olvidar('/config'); await loadCfg(); }
 
@@ -919,7 +946,7 @@ async function crearAgente(){
   try{ const r=await fetch('/panel/api'+conCanal('/agentes'),{method:'POST',headers:headers(),body:JSON.stringify(body)});
     const d=await r.json().catch(()=>({}));
     if(!r.ok){ $('#ag_msg').innerHTML='<span class="bad">'+esc(d.detail||('Error '+r.status))+'</span>'; return; }
-    const donde=(ambos||!canalSel)?'en los dos números':'sólo en '+nombreCanalSel();
+    const donde=(ambos||!esCanalReal())?'en los dos números':'sólo en '+nombreCanalSel();
     $('#ag_msg').innerHTML='<span class="ok">Agente "'+esc(nombre)+'" creado ✓ ya atiende conversaciones '+esc(donde)+'</span>';
     $('#ag_nombre').value='';$('#ag_desc').value='';$('#ag_palabras').value='';$('#ag_prompt').value='';
     document.querySelectorAll('.agpack:checked').forEach(c=>c.checked=false);
@@ -940,12 +967,12 @@ function gut(el,ta){ if(!el||!ta)return; const n=(ta.value.match(/\n/g)||[]).len
 function syncGutter(){ gut($('#pgut'),$('#pov')); }
 function syncGutterBase(){ gut($('#pgutb'),$('#pbase')); }
 async function savePrompt(){ const a=$('#pagente').value; const ambos=ambosDe('prompt');
-  if(canalSel&&ambos&&!confirm('¿Guardar este prompt para los DOS números?'))return;
+  if(esCanalReal()&&ambos&&!confirm('¿Guardar este prompt para los DOS números?'))return;
   try{ const d=await apiC('/prompts/'+a,{method:'POST',body:JSON.stringify({override:$('#pov').value,ambos})});
     const de={canal:'sólo '+nombreCanalSel(),comun:'los dos números',base:'.md base'}[d.origen||'base'];
     $('#pmsg').innerHTML='<span class="ok">Guardado ✓ ('+esc(de)+')</span>'; olvidar('/prompts'); await loadPrompt();
   }catch(e){ $('#pmsg').innerHTML='<span class="bad">Error (¿mínimo 40 caracteres?)</span>'; } setTimeout(()=>$('#pmsg').textContent='',3500); }
-async function resetPrompt(){ if(!confirm(canalSel?('¿Que '+nombreCanalSel()+' vuelva a usar el prompt heredado (común o .md base)?'):'¿Volver al .md base de este agente?'))return; $('#pov').value=''; await savePrompt(); }
+async function resetPrompt(){ if(!confirm(esCanalReal()?('¿Que '+nombreCanalSel()+' vuelva a usar el prompt heredado (común o .md base)?'):'¿Volver al .md base de este agente?'))return; $('#pov').value=''; await savePrompt(); }
 async function guardarBaseComoOverride(){ const t=$('#pbase').value; if(t.trim().length<40){ $('#pmsg').innerHTML='<span class="bad">Mínimo 40 caracteres</span>'; return; } $('#pov').value=t; syncGutter(); await savePrompt(); }
 function subirMd(ev){ const f=ev.target.files[0]; if(!f)return; const rd=new FileReader(); rd.onload=()=>{ $('#pov').value=rd.result; syncGutter(); $('#pmsg').innerHTML='<span class="meta">Archivo cargado; dale Guardar.</span>'; }; rd.readAsText(f); ev.target.value=''; }
 

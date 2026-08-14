@@ -111,6 +111,70 @@ class TestPestanas:
         assert [c["canal"] for c in d["canales"]] == sorted([CA, CB])
 
 
+class TestSinCanal:
+    """Conversaciones anteriores a que se guardara el emisor: no tienen número.
+
+    Ojo con el id: si "Sin canal" usara "" (como "Todos"), hacerle clic mostraría
+    TODAS las conversaciones y el panel diría que estás configurando un número.
+    """
+
+    def _viejas(self, cliente, n=3):
+        import json as _json
+
+        from app.panel import events
+
+        import app.redis_client as rc
+        fake = rc._pool
+        for i in range(n):
+            chat = f"1809888{i:04d}"
+            fake.hashes.setdefault(events.CHATMETA_KEY, {})[chat] = _json.dumps(
+                {"chat_id": chat, "user_name": f"Viejo {i}", "ultimo": "hola",
+                 "ultimo_de": "cliente", "ultimo_ts": 500 + i}  # sin emisor
+            )
+
+    def test_van_a_su_propia_pestana_no_a_todos(self, cliente):
+        self._viejas(cliente)
+        d = _get(cliente, "/panel/api/chats")
+        sin = [c for c in d["canales"] if c["canal"] == "-"]
+        assert sin and sin[0]["nombre"] == "Sin canal" and sin[0]["total"] == 3
+        assert all(c["canal"] == "-" for c in d["chats"])
+        # Y NO se cuentan como de ninguno de los dos números.
+        assert {c["canal"]: c["total"] for c in d["canales"] if c["canal"] != "-"} == {
+            CA: 0, CB: 0
+        }
+
+    def test_asignarlas_las_mueve_al_numero_elegido(self, cliente):
+        self._viejas(cliente)
+        r = cliente.post(f"/panel/api/chats/asignar-canal?canal={CB}")
+        assert r.status_code == 200, r.text
+        assert r.json()["asignadas"] == 3
+        d = _get(cliente, "/panel/api/chats")
+        assert {c["canal"] for c in d["chats"]} == {CB}
+        assert [c["total"] for c in d["canales"] if c["canal"] == CB] == [3]
+        assert not [c for c in d["canales"] if c["canal"] == "-"]
+
+    def test_no_toca_las_que_ya_tienen_numero(self, cliente):
+        import json as _json
+
+        from app.panel import events
+
+        import app.redis_client as rc
+        rc._pool.hashes.setdefault(events.CHATMETA_KEY, {})["18091112222"] = _json.dumps(
+            {"chat_id": "18091112222", "emisor": A, "ultimo": "hola", "ultimo_de": "bot",
+             "ultimo_ts": 900}
+        )
+        self._viejas(cliente, 2)
+        assert cliente.post(f"/panel/api/chats/asignar-canal?canal={CB}").json()[
+            "asignadas"
+        ] == 2
+        d = _get(cliente, "/panel/api/chats")
+        por_chat = {c["chat_id"]: c["canal"] for c in d["chats"]}
+        assert por_chat["18091112222"] == CA  # el que ya tenía número, intacto
+
+    def test_sin_canal_no_se_puede_asignar(self, cliente):
+        assert cliente.post("/panel/api/chats/asignar-canal").status_code == 400
+
+
 class TestRendimientoYFallas:
     """La lista de chats es lo que más se refresca: no puede costar una ida a Redis
     por conversación, ni mentir cuando Redis no responde."""
