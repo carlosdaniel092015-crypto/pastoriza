@@ -16,10 +16,23 @@ class FakeRedis:
         self.hashes: dict[str, dict[str, str]] = {}
         self.listas: dict[str, list[str]] = {}
         self.seq: dict[str, int] = {}
+        # Registro de operaciones: sirve para verificar que el panel no hace una
+        # lectura por conversación en cada refresco.
+        self.contar = False
+        self.ops: list[str] = []
+
+    def _reg(self, nombre: str) -> None:
+        if self.contar:
+            self.ops.append(nombre)
 
     # --- strings ---
     async def get(self, key: str) -> str | None:
+        self._reg("get")
         return self.kv.get(key)
+
+    async def mget(self, keys: list[str]) -> list[str | None]:
+        self._reg("mget")
+        return [self.kv.get(k) for k in keys]
 
     async def set(self, key: str, val: Any, nx: bool = False, ex: int | None = None):
         if nx and key in self.kv:

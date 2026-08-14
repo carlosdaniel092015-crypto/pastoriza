@@ -91,6 +91,25 @@ async def bot_pausado(chat_id: str) -> bool:
         return False
 
 
+async def pausados(chat_ids: list[str]) -> set[str]:
+    """Cuáles de esos chats están en control humano, en UNA sola ida a Redis.
+
+    El panel necesita el estado de TODAS las conversaciones en cada refresco: con
+    un `get` por chat eran cientos de idas y vueltas por poll (lento para quien
+    opera y carga inútil sobre el mismo Redis que usa el bot para atender).
+    """
+    ids = [c for c in chat_ids if c]
+    if not ids:
+        return set()
+    claves = [settings.key("bot_disabled", c) for c in ids]
+    try:
+        valores = await with_reconnect(lambda r: r.mget(claves))
+    except Exception:  # noqa: BLE001
+        log.warning("pausados_check_fallo", chats=len(ids))
+        return set()
+    return {c for c, v in zip(ids, valores or []) if v}
+
+
 TTL_MSG_BOT = 7200  # 2h: ventana para reconocer un mensaje como "enviado por el bot"
 
 

@@ -553,7 +553,9 @@ async function loadStats(){
 }
 
 // conversaciones
+let degradado='';
 async function loadChats(){ try{ const d=await api('/chats'); chatsCache=d.chats;
+  degradado=d.degradado||''; $('#hdot').classList.toggle('bad',!!degradado);
   CANALES=d.canales||[]; renderCanales();
   // Si el canal elegido ya no existe (se renombró o no tiene chats), volver a Todos.
   if(canalSel && !CANALES.some(c=>c.canal===canalSel)){ canalSel=''; localStorage.setItem('panel_canal',''); renderCanales(); }
@@ -581,6 +583,17 @@ function nombreCanalSel(){ const c=CANALES.find(x=>x.canal===canalSel); return c
 function conCanal(path){ if(!canalSel) return path;
   return path+(path.includes('?')?'&':'?')+'canal='+encodeURIComponent(canalSel); }
 function apiC(path,opt){ return api(conCanal(path),opt); }
+// Caché por (ruta + canal) para que cambiar de módulo o de número PINTE YA con lo
+// último que se vio y revalide contra el servidor detrás. Sin esto, cada clic en el
+// menú o en una pestaña esperaba una ida y vuelta (los prompts son ~34 KB) y se
+// sentía trabado. Se invalida al guardar (`olvidar`).
+const CACHE={};
+async function apiCache(path,pintar){
+  const k=conCanal(path);
+  if(CACHE[k]!==undefined){ try{ pintar(CACHE[k],true); }catch(e){ console.error(e); } }
+  const d=await api(k); CACHE[k]=d; pintar(d,false); return d;
+}
+function olvidar(prefijo){ for(const k of Object.keys(CACHE)) if(k.startsWith(prefijo)) delete CACHE[k]; }
 function setCanal(id){ canalSel=id; localStorage.setItem('panel_canal',id);
   _chatsSig=''; cerrarHilo(); renderCanales(); renderChats(); loadStats();
   renderFiltros(); renderFeed(); marcarComun();
@@ -632,11 +645,19 @@ function quienDijo(de){
 }
 function renderChats(){
   const lista=chatsDelCanal();
-  const sig=JSON.stringify(lista.map(c=>[c.chat_id,c.ultimo,c.ultimo_de,c.ultimo_ts,c.pausado]))+'|'+selChat+'|'+canalSel;
+  const sig=JSON.stringify(lista.map(c=>[c.chat_id,c.ultimo,c.ultimo_de,c.ultimo_ts,c.pausado]))+'|'+selChat+'|'+canalSel+'|'+degradado;
   if(sig===_chatsSig) return; _chatsSig=sig;
   $('#chcount').textContent=lista.length;
   const el=$('#chats');
-  if(!lista.length){ el.innerHTML='<div class="empty">'+(canalSel?'Este canal no tiene conversaciones.':'Sin conversaciones aún.')+'</div>'; return; }
+  if(!lista.length){
+    // Sin esto, "Redis caído" y "no hay conversaciones" se veían IGUAL (lista en 0).
+    el.innerHTML = degradado
+      ? '<div class="empty" style="color:var(--err)">⚠️ No pude leer las conversaciones: <b>falla de memoria (Redis)</b>.<br>'+
+        '<span class="mono" style="font-size:11px">'+esc(degradado)+'</span><br>'+
+        'La lista está en 0 por eso, NO porque no haya clientes escribiendo.<br>'+
+        '<button class="btn sec sm" style="margin-top:8px" onclick="loadChats()">Reintentar</button></div>'
+      : '<div class="empty">'+(canalSel?'Este canal no tiene conversaciones.':'Sin conversaciones aún.')+'</div>';
+    return; }
   el.innerHTML=lista.map(c=>{
     const nombre=c.user_name||c.chat_id;
     const dot=c.pausado?'<span class="adot" title="en control humano"></span>':'';
@@ -822,7 +843,10 @@ const GRUPOS=[{t:'Números de WhatsApp (canales)',s:'Uno por línea: número = n
 const LBL={canales:'Números y nombres',precio_envio:'Precio de envío',dias_envio:'Días de entrega',hora_corte:'Hora de corte',nota_envio:'Notas de envío',info_envio:'Info de envío',banco1_nombre:'Banco',banco1_cuenta:'Número de cuenta',banco2_nombre:'Banco 2',banco2_cuenta:'Número de cuenta 2',titular:'Titular',cedula:'RNC',msg_comprobante:'Mensaje de comprobante',direccion:'Dirección',telefono:'Teléfono',horario_tienda:'Horario',website:'Website',maps_url:'Enlace de Maps',nota_botellon:'Nota de botellón',nota_stock:'Cuando no hay stock',msg_escalar:'Cuando pasa a un asesor',monto_minimo:'Pedido mínimo (RD$)',minimo_envio:'Mínimo para envío (por tamaño)',formas_pago:'Formas de pago',contra_entrega:'¿Pago contra entrega?',fardo_cantidad:'Unidades por fardo',fardo_envio_minimo:'Envío mínimo por fardo'};
 const HINTS={canales:'Ej: 18099221092 = Tienda · 18294716701 = Mayorista. El nombre es sólo para verlo acá.',precio_envio:'En el chat: "El envío dentro del Gran Santo Domingo son RD$ …"',hora_corte:'Después de esa hora el pedido sale al día siguiente.',msg_comprobante:'Se envía justo después de dar la cuenta.',msg_escalar:'En el chat aparece antes de "Pasado a un asesor".'};
 let cfgDirty=0, cfgPropios=[];
-async function loadCfg(){ marcarComun(); const d=await apiC('/config'); cfgDirty=0;
+async function loadCfg(){ marcarComun();
+  // No pisar lo que el operador está escribiendo si la revalidación llega después.
+  return apiCache('/config',(d,deCache)=>{ if(cfgDirty && !deCache) return; pintarCfg(d); }); }
+function pintarCfg(d){ cfgDirty=0;
   cfgPropios=d._propios||[];
   // En "Todos" se edita la común: hay que decir qué número NO va a ver el cambio
   // porque tiene ese campo personalizado.
@@ -851,15 +875,17 @@ async function saveCfg(){ const data={}; document.querySelectorAll('[id^=cfg_]')
   data._ambos=ambosDe('config');
   if(canalSel&&data._ambos&&!confirm('¿Aplicar esta configuración a los DOS números? Se reemplaza también la del otro canal.'))return;
   await apiC('/config',{method:'POST',body:JSON.stringify(data)}); cfgDirty=0;
+  olvidar('/config');  // el cambio puede afectar al otro número: se recarga de verdad
   $('#cfgmsg').innerHTML='<span class="ok">Guardado ✓ '+(data._ambos||!canalSel?'(los dos números)':'(sólo '+esc(nombreCanalSel())+')')+'</span>';
   await loadCfg(); }
 async function resetCfg(){ if(!canalSel)return;
   if(!confirm('¿Que '+nombreCanalSel()+' vuelva a usar la configuración común? Se borran sus valores propios.'))return;
-  await apiC('/config',{method:'DELETE'}); await loadCfg(); }
+  await apiC('/config',{method:'DELETE'}); olvidar('/config'); await loadCfg(); }
 
 // prompt
 let PROMPTS={}, PACKS_AG={}, AGENTES_CUSTOM=[];
-async function loadPrompt(){ marcarComun(); const d=await apiC('/prompts'); PROMPTS=d.prompts||{};
+async function loadPrompt(){ marcarComun(); return apiCache('/prompts',pintarPrompt); }
+function pintarPrompt(d){ PROMPTS=d.prompts||{};
   PACKS_AG=d.packs||{}; AGENTES_CUSTOM=d.personalizados||[];
   const sel=$('#pagente'); const prev=sel.value;
   sel.innerHTML=(d.agentes||[]).map(a=>{const cst=AGENTES_CUSTOM.some(c=>c.nombre===a);
@@ -897,10 +923,10 @@ async function crearAgente(){
     $('#ag_msg').innerHTML='<span class="ok">Agente "'+esc(nombre)+'" creado ✓ ya atiende conversaciones '+esc(donde)+'</span>';
     $('#ag_nombre').value='';$('#ag_desc').value='';$('#ag_palabras').value='';$('#ag_prompt').value='';
     document.querySelectorAll('.agpack:checked').forEach(c=>c.checked=false);
-    await loadPrompt();
+    olvidar('/prompts'); await loadPrompt();
   }catch(e){ $('#ag_msg').innerHTML='<span class="bad">Error: '+esc(String(e))+'</span>'; } }
 async function borrarAgente(nombre){ if(!confirm('¿Eliminar el agente "'+nombre+'"? Sus conversaciones futuras las tomarán los agentes base.'))return;
-  try{ await apiC('/agentes/'+encodeURIComponent(nombre),{method:'DELETE'}); await loadPrompt(); }
+  try{ await apiC('/agentes/'+encodeURIComponent(nombre),{method:'DELETE'}); olvidar('/prompts'); await loadPrompt(); }
   catch(e){ alert('No se pudo eliminar: '+e); } }
 function mostrarPrompt(){ const a=$('#pagente').value,p=PROMPTS[a]||{}; $('#pov').value=p.override||''; $('#pbase').value=p.base||'';
   const ov=p.usando_override; $('#pdot').className='d'+(ov?'':' base');
@@ -917,7 +943,7 @@ async function savePrompt(){ const a=$('#pagente').value; const ambos=ambosDe('p
   if(canalSel&&ambos&&!confirm('¿Guardar este prompt para los DOS números?'))return;
   try{ const d=await apiC('/prompts/'+a,{method:'POST',body:JSON.stringify({override:$('#pov').value,ambos})});
     const de={canal:'sólo '+nombreCanalSel(),comun:'los dos números',base:'.md base'}[d.origen||'base'];
-    $('#pmsg').innerHTML='<span class="ok">Guardado ✓ ('+esc(de)+')</span>'; await loadPrompt();
+    $('#pmsg').innerHTML='<span class="ok">Guardado ✓ ('+esc(de)+')</span>'; olvidar('/prompts'); await loadPrompt();
   }catch(e){ $('#pmsg').innerHTML='<span class="bad">Error (¿mínimo 40 caracteres?)</span>'; } setTimeout(()=>$('#pmsg').textContent='',3500); }
 async function resetPrompt(){ if(!confirm(canalSel?('¿Que '+nombreCanalSel()+' vuelva a usar el prompt heredado (común o .md base)?'):'¿Volver al .md base de este agente?'))return; $('#pov').value=''; await savePrompt(); }
 async function guardarBaseComoOverride(){ const t=$('#pbase').value; if(t.trim().length<40){ $('#pmsg').innerHTML='<span class="bad">Mínimo 40 caracteres</span>'; return; } $('#pov').value=t; syncGutter(); await savePrompt(); }
@@ -927,8 +953,9 @@ function subirMd(ev){ const f=ev.target.files[0]; if(!f)return; const rd=new Fil
 function normR(s){ return (s||'').toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g,'').replace(/[^a-z0-9 ]/g,' ').split(/\s+/).filter(Boolean); }
 function simil(a,b){ const A=new Set(normR(a)),B=new Set(normR(b)); if(!A.size||!B.size)return 0; let inter=0; A.forEach(x=>{if(B.has(x))inter++;}); return inter/new Set([...A,...B]).size; }
 function detectarDup(reglas){ for(let i=0;i<reglas.length;i++)for(let j=i+1;j<reglas.length;j++){ if(simil(reglas[i].texto,reglas[j].texto)>=0.6) return {i,j}; } return null; }
-async function combinar(id){ if(!confirm('¿Eliminar la regla duplicada y quedarte con una sola?'))return; await api('/reglas/'+id,{method:'DELETE'}); loadAprendizaje(); }
-async function loadAprendizaje(){ marcarComun(); const d=await apiC('/aprendizaje'); const sugs=d.sugerencias||[],reglas=d.reglas||[],correc=d.correcciones||[];
+async function combinar(id){ if(!confirm('¿Eliminar la regla duplicada y quedarte con una sola?'))return; await api('/reglas/'+id,{method:'DELETE'}); olvidar('/aprendizaje'); loadAprendizaje(); }
+async function loadAprendizaje(){ marcarComun(); return apiCache('/aprendizaje',pintarAprendizaje); }
+function pintarAprendizaje(d){ const sugs=d.sugerencias||[],reglas=d.reglas||[],correc=d.correcciones||[];
   const pend=sugs.filter(s=>s.estado==='pendiente'); const bs=$('#badgeSug'); if(pend.length){bs.style.display='block';bs.textContent=pend.length;}else bs.style.display='none';
   $('#hsug').textContent=pend.length; $('#hreg').textContent=reglas.length;
   $('#sugs').innerHTML=sugs.length?sugs.map(s=>{const st=s.estado==='pendiente'?'':(s.estado==='aprobada'?'<span class="ok">✓ aprobada</span>':'<span class="bad">✕ descartada</span>');
@@ -944,13 +971,13 @@ async function loadAprendizaje(){ marcarComun(); const d=await apiC('/aprendizaj
     return `<div class="rrow ${isdup?'dup':''}"><span class="rn">${String(i+1).padStart(2,'0')}</span><span class="rt">${esc(r.texto)}${chipCanal(r.canal||'')}</span><span class="ro">(${esc(r.origen||'manual')})</span><button class="rx" onclick="delRegla(${r.id})">×</button></div>`;}).join(''):'<div class="empty">Sin reglas.</div>';
   $('#reglas').innerHTML=rhtml;
   $('#correcciones').innerHTML=correc.length?correc.map(c=>`<div class="group" style="padding:10px 12px"><div><b>Si:</b> ${esc(c.situacion)}${chipCanal(c.canal||'')}</div><div><b>Responde:</b> ${esc(c.respuesta_correcta)}</div><button class="btn sec sm" style="margin-top:6px" onclick="delCorreccion(${c.id})">Borrar</button></div>`).join(''):'<div class="empty">Sin correcciones.</div>'; }
-async function addRegla(){ const t=$('#regin').value.trim(); if(t.length<5)return; $('#regin').value=''; await apiC('/reglas',{method:'POST',body:JSON.stringify({texto:t,ambos:ambosDe('aprendizaje')})}); loadAprendizaje(); }
-async function delRegla(id){ await apiC('/reglas/'+id,{method:'DELETE'}); loadAprendizaje(); }
-async function addCorreccion(){ const s=$('#corsit').value.trim(),r=$('#corresp').value.trim(); if(!s||!r)return; $('#corsit').value='';$('#corresp').value=''; await apiC('/correcciones',{method:'POST',body:JSON.stringify({situacion:s,respuesta_correcta:r,ambos:ambosDe('aprendizaje')})}); loadAprendizaje(); }
-async function delCorreccion(id){ await apiC('/correcciones/'+id,{method:'DELETE'}); loadAprendizaje(); }
-async function aprobarSug(id){ await api('/sugerencias/'+id+'/aprobar',{method:'POST'}); loadAprendizaje(); }
-async function rechazarSug(id){ await api('/sugerencias/'+id+'/rechazar',{method:'POST'}); loadAprendizaje(); }
-async function analizar(){ $('#anmsg').textContent='Analizando…'; try{ const d=await apiC('/sugerencias/analizar',{method:'POST'}); $('#anmsg').innerHTML='<span class="ok">Listo: '+(d.sugeridas||0)+' sugerencia(s), '+(d.auto_aplicadas||0)+' aplicada(s).</span>'; }catch(e){ $('#anmsg').innerHTML='<span class="bad">Error al analizar</span>'; } loadAprendizaje(); }
+async function addRegla(){ const t=$('#regin').value.trim(); if(t.length<5)return; $('#regin').value=''; await apiC('/reglas',{method:'POST',body:JSON.stringify({texto:t,ambos:ambosDe('aprendizaje')})}); olvidar('/aprendizaje'); loadAprendizaje(); }
+async function delRegla(id){ await apiC('/reglas/'+id,{method:'DELETE'}); olvidar('/aprendizaje'); loadAprendizaje(); }
+async function addCorreccion(){ const s=$('#corsit').value.trim(),r=$('#corresp').value.trim(); if(!s||!r)return; $('#corsit').value='';$('#corresp').value=''; await apiC('/correcciones',{method:'POST',body:JSON.stringify({situacion:s,respuesta_correcta:r,ambos:ambosDe('aprendizaje')})}); olvidar('/aprendizaje'); loadAprendizaje(); }
+async function delCorreccion(id){ await apiC('/correcciones/'+id,{method:'DELETE'}); olvidar('/aprendizaje'); loadAprendizaje(); }
+async function aprobarSug(id){ await api('/sugerencias/'+id+'/aprobar',{method:'POST'}); olvidar('/aprendizaje'); loadAprendizaje(); }
+async function rechazarSug(id){ await api('/sugerencias/'+id+'/rechazar',{method:'POST'}); olvidar('/aprendizaje'); loadAprendizaje(); }
+async function analizar(){ $('#anmsg').textContent='Analizando…'; try{ const d=await apiC('/sugerencias/analizar',{method:'POST'}); $('#anmsg').innerHTML='<span class="ok">Listo: '+(d.sugeridas||0)+' sugerencia(s), '+(d.auto_aplicadas||0)+' aplicada(s).</span>'; }catch(e){ $('#anmsg').innerHTML='<span class="bad">Error al analizar</span>'; } olvidar('/aprendizaje'); loadAprendizaje(); }
 
 // ---------------------------------------------------------- PWA ---
 let swReg=null, deferredPrompt=null;

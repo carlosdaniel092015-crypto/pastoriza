@@ -187,13 +187,21 @@ async def borrar_chatmeta(chat_id: str) -> None:
         log.warning("chatmeta_no_borrado", error=str(exc))
 
 
-async def todos_chatmeta() -> dict[str, dict]:
+async def todos_chatmeta(estricto: bool = False) -> dict[str, dict]:
+    """Índice de conversaciones del panel.
+
+    `estricto=True` propaga el fallo de Redis en vez de devolver {}: un índice vacío
+    por error se veía EXACTAMENTE igual que "no hay conversaciones", y quien opera no
+    tenía forma de distinguirlo.
+    """
     async def _op(r: Any) -> dict:
         return await r.hgetall(CHATMETA_KEY)
 
     try:
         raw = await with_reconnect(_op)
     except Exception:  # noqa: BLE001
+        if estricto:
+            raise
         return {}
     out: dict[str, dict] = {}
     for k, v in (raw or {}).items():
