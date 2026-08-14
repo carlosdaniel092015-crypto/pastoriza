@@ -154,6 +154,22 @@ class TestConfigPorCanal:
         assert (await bc.load_config(B, force=True)).canales == "18099221092 = Solo yo"
 
     @pytest.mark.asyncio
+    async def test_guardar_sin_mandar_la_lista_no_borra_los_canales(self, redis):
+        """Regresión: sin esto, un guardado que no incluya `canales` deja el panel
+        sin pestañas (y el bot sin saber qué números existen)."""
+        await bc.save_config({"precio_envio": "600"})  # payload sin `canales`
+        assert set(await bc.canales_configurados()) == {CA, CB}
+
+    @pytest.mark.asyncio
+    async def test_renombrar_los_canales_desde_un_canal(self, redis):
+        await bc.save_config(
+            {"precio_envio": "700", "canales": f"{A} = Tienda\n{B} = Exportacion"},
+            canal=B,
+        )
+        cfg = await bc.load_config(A, force=True)
+        assert "Exportacion" in cfg.canales  # la lista se ve desde los dos
+
+    @pytest.mark.asyncio
     async def test_resetear_vuelve_a_la_comun(self, redis):
         await bc.save_config({"precio_envio": "700"}, canal=A)
         assert (await bc.load_config(A, force=True)).precio_envio == "700"
@@ -167,6 +183,34 @@ class TestConfigPorCanal:
         cfg = await bc.load_config(A, force=True)
         assert cfg.precio_envio == "700"
         assert cfg.monto_minimo == "1000"
+
+    @pytest.mark.asyncio
+    async def test_guardar_la_comun_no_borra_lo_propio_de_un_canal(self, redis):
+        """Editar desde "Todos" toca SÓLO la base: perder lo personalizado de un
+        número sin avisar sería una pérdida silenciosa."""
+        await bc.save_config({"precio_envio": "700"}, canal=B)
+        await bc.save_config({"precio_envio": "600", "monto_minimo": "3000"})
+        assert (await bc.load_config(B, force=True)).precio_envio == "700"
+        assert (await bc.load_config(B, force=True)).monto_minimo == "3000"
+        assert (await bc.load_config(A, force=True)).precio_envio == "600"
+        # Y el panel puede avisar de eso.
+        assert await bc.overrides_por_canal() == {CB: ["precio_envio"]}
+
+    @pytest.mark.asyncio
+    async def test_solo_queda_propio_lo_que_de_verdad_cambio(self, redis):
+        """El panel manda el formulario completo; propio debe ser sólo lo distinto.
+
+        Si no, el canal dejaría de heredar TODO y un cambio posterior en la común no
+        le llegaría nunca (además la marca de "campo propio" se prendería en todos).
+        """
+        completo = {"precio_envio": "700", "monto_minimo": "1000",
+                    "titular": "PASTORIZA PLASTICS SRL"}
+        await bc.save_config(completo, canal=A)
+        assert sorted(await bc.overrides_de_canal(A)) == ["precio_envio"]
+        # Y lo que quedó heredado sigue a la común cuando ésta cambia.
+        await bc.save_config({"monto_minimo": "3000", "canales": ""}, ambos=False)
+        assert (await bc.load_config(A, force=True)).monto_minimo == "3000"
+        assert (await bc.load_config(A, force=True)).precio_envio == "700"
 
     @pytest.mark.asyncio
     async def test_canales_configurados(self, redis):
