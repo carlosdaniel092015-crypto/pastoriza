@@ -167,6 +167,7 @@ PANEL_HTML = r"""<!doctype html>
   .hitos{display:flex;gap:4px;flex-wrap:wrap;margin-top:4px}
   .hito{font-size:9.5px;font-family:var(--mono);color:var(--mut);border:1px solid var(--line);
     border-radius:3px;padding:1px 5px}
+  .hito.falta{color:var(--cinta);border-color:var(--cinta)}
   .ordbtn{background:transparent;border:1px solid var(--line);color:var(--mut);border-radius:4px;
     font-size:10px;font-family:var(--mono);padding:2px 6px;cursor:pointer;margin-left:6px}
   .ordbtn.on{color:var(--senal);border-color:var(--senal)}
@@ -689,9 +690,10 @@ function marcarComun(){
 }
 // Semáforo de cierre: SIEMPRE con el motivo. Un número o un color sin explicación se
 // vuelve un juicio sobre el cliente que nadie puede discutir.
-const TEXTO_SEM={verde:'Cerca de cerrar',amarillo:'Interesado',gris:'Sin señales todavía',cerrado:'Pedido creado y pagado'};
+const TEXTO_SEM={verde:'Cerca de cerrar',amarillo:'Interesado',gris:'Sin señales todavía',cerrado:'Pedido creado'};
 function tituloSem(c){
-  const t=TEXTO_SEM[c.sem||'gris']||'Sin señales todavía';
+  let t=TEXTO_SEM[c.sem||'gris']||'Sin señales todavía';
+  if(c.falta_pago) t+=' · sin comprobante todavía';
   const h=(c.hitos||[]).join(' · ');
   return h?(t+': '+h):(t+' (todavía no hizo nada medible; no significa que no vaya a comprar)');
 }
@@ -703,7 +705,7 @@ const COLS=[
   {k:'gris',     t:'Sin señales aún',  e:'Todavía no hizo nada medible. NO significa que no vaya a comprar: muchos preguntan hoy y compran semanas después.'},
   {k:'amarillo', t:'Interesado',       e:'Avanzó algo (cotizó, eligió envío o retiro) pero todavía no llegó al momento de pagar.'},
   {k:'verde',    t:'Cerca de cerrar',  e:'Pidió las cuentas, cotizó sobre el mínimo, dio dirección o ya dice que pagó. Estos son los que conviene llamar primero.'},
-  {k:'cerrado',  t:'Pedido creado',    e:'Ya pagó y su pedido está en Odoo. No necesita llamada de venta.'},
+  {k:'cerrado',  t:'Pedido creado',    e:'El pedido ya existe en Odoo. Si dice «falta el comprobante» es que todavía no hay prueba de pago: normal en retiro en tienda (paga en el mostrador), pero en envío hay que esperar la transferencia antes de despachar.'},
 ];
 function grupoSem(c){ return c.sem || 'gris'; }   // sin datos se muestra con los grises
 function renderSemaforo(){
@@ -714,15 +716,20 @@ function renderSemaforo(){
   const nverde=porCol.verde.length;
   const b=$('#badgeSem'); if(b){ if(nverde){b.style.display='block';b.textContent=nverde;}else b.style.display='none'; }
   el.innerHTML=COLS.map(col=>{
-    const items=col.k==='gris'
-      ? porCol[col.k].slice().sort((a,b)=>(b.ultimo_ts||0)-(a.ultimo_ts||0))
-      : porCol[col.k].slice().sort((a,b)=>(b.score||0)-(a.score||0)||(b.ultimo_ts||0)-(a.ultimo_ts||0));
+    let items=porCol[col.k].slice();
+    if(col.k==='gris') items.sort((a,b)=>(b.ultimo_ts||0)-(a.ultimo_ts||0));
+    else if(col.k==='cerrado')
+      // Primero los pedidos que todavía no tienen comprobante: en un envío hay que
+      // esperar la transferencia antes de despachar.
+      items.sort((a,b)=>(b.falta_pago?1:0)-(a.falta_pago?1:0)||(b.ultimo_ts||0)-(a.ultimo_ts||0));
+    else items.sort((a,b)=>(b.score||0)-(a.score||0)||(b.ultimo_ts||0)-(a.ultimo_ts||0));
     return `<div class="semcol">
       <h4><span class="sem ${col.k}"></span>${col.t}<span class="c">${items.length}</span></h4>
       <div class="expl">${col.e}</div>
       <div class="cuerpo">${items.length?items.slice(0,60).map(c=>{
         const nombre=c.user_name||c.chat_id;
-        const hs=(c.hitos||[]).slice(0,3).map(h=>`<span class="hito">${esc(h)}</span>`).join('');
+        const hs=(c.falta_pago?'<span class="hito falta">Falta el comprobante</span>':'')
+          +(c.hitos||[]).slice(0,3).map(h=>`<span class="hito">${esc(h)}</span>`).join('');
         return `<button class="semitem ${col.k}" onclick="verConv('${c.chat_id}')" title="${esc(tituloSem(c))}">
           <div class="nm">${esc(nombre)}${(c.score&&col.k!=='gris')?`<span class="hito">${c.score}</span>`:''}<span class="h">${fmtRel(c.ultimo_ts)}</span></div>
           <div class="ul">${quienDijo(c.ultimo_de)}${esc(c.ultimo)||'—'}</div>
@@ -831,7 +838,7 @@ async function openChat(id){
   const fila=chatsCache.find(c=>c.chat_id===id)||{};
   const hitos=(fila.hitos||[]).map(h=>`<span class="hito">${esc(h)}</span>`).join('');
   const semHtml=fila.sem
-    ? `<div class="cs" style="margin-top:5px"><span class="sem ${fila.sem}"></span> ${esc(TEXTO_SEM[fila.sem]||'')}${fila.score!=null?' · '+fila.score+'/100':''}</div>
+    ? `<div class="cs" style="margin-top:5px"><span class="sem ${fila.sem}"></span> ${esc(TEXTO_SEM[fila.sem]||'')}${fila.score!=null?' · '+fila.score+'/100':''}${fila.falta_pago?' <span class="hito falta">Falta el comprobante</span>':''}</div>
        ${hitos?`<div class="hitos">${hitos}</div>`:'<div class="cs" style="font-size:11px">Todavía no hizo nada medible. No significa que no vaya a comprar.</div>'}`
     : '';
   $('#thead').innerHTML=`<div class="row1"><button class="backbtn" onclick="cerrarHilo()" title="Volver">‹</button><div><div class="cn">${esc(m.user_name)||esc(id)}</div><div class="cs">${esc(canal)}</div>${semHtml}</div>

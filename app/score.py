@@ -192,8 +192,13 @@ def puntuar(previos: list[str] | None, nuevos: set[str] | None = None) -> dict:
     )
     score = min(100, sum(PESOS[h][0] for h in hitos))
 
-    if "pedido" in hitos and ("comprobante" in hitos or "dijo_pago" in hitos):
-        sem = "cerrado"  # ya pagó y el pedido existe: no hay a quién llamar
+    # Si el pedido EXISTE en Odoo, la conversación ya no es una venta por cerrar: es un
+    # pedido. Y punto. Antes se exigía también prueba de pago, y eso dejaba fuera al
+    # RETIRO EN TIENDA —que paga en el mostrador, sin comprobante—: un pedido real
+    # aparecía como "cerca de cerrar". Lo que falte del pago se marca aparte
+    # (`falta_pago`), que es distinto de que el pedido no exista.
+    if "pedido" in hitos:
+        sem = "cerrado"
     elif score >= UMBRAL_VERDE:
         sem = "verde"
     elif score >= UMBRAL_AMARILLO:
@@ -201,6 +206,17 @@ def puntuar(previos: list[str] | None, nuevos: set[str] | None = None) -> dict:
     else:
         sem = "gris"
     return {"score": score, "sem": sem, "hitos": hitos}
+
+
+def falta_pago(hitos: list[str] | None) -> bool:
+    """Pedido creado del que todavía NO hay prueba de pago.
+
+    No baja el semáforo (el pedido existe), pero hay que poder verlo: en un envío el
+    despacho espera la transferencia. En un retiro en tienda se paga en el mostrador,
+    así que suele ser normal — por eso se muestra como aviso y no como problema.
+    """
+    h = set(hitos or [])
+    return "pedido" in h and not ({"comprobante", "dijo_pago"} & h)
 
 
 def etiquetas(hitos: list[str] | None) -> list[str]:
@@ -211,6 +227,7 @@ def etiquetas(hitos: list[str] | None) -> list[str]:
 
 __all__ = [
     "PESOS",
+    "falta_pago",
     "desde_historial",
     "reconstruir",
     "PRIORIDAD",
