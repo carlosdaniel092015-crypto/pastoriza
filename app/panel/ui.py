@@ -101,14 +101,23 @@ PANEL_HTML = r"""<!doctype html>
   .chat .n.num{font-family:var(--mono);font-weight:500;letter-spacing:-.02em}
   .chat .h{font-family:var(--mono);font-size:11px;color:var(--mut)}
   .chat .m{color:var(--mut);font-size:13px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-  /* Canales (los dos números de YCloud): cada uno con sus conversaciones. */
-  .canales{display:flex;gap:5px;padding:7px 10px;border-bottom:1px solid var(--line);flex-wrap:wrap}
-  .canales button{background:var(--panel2);border:1px solid var(--line);color:var(--mut);
-    padding:5px 9px;border-radius:999px;font-size:11.5px;font-family:var(--mono);cursor:pointer;display:flex;gap:5px;align-items:center}
-  .canales button:hover{color:var(--tx)}
-  .canales button.on{border-color:var(--senal);color:var(--tx);background:linear-gradient(180deg,rgba(200,87,30,.16),transparent)}
-  .canales button b{font-weight:600}
-  .canales button .esp{color:var(--senal)}
+  /* PESTAÑAS DE CANAL (los dos números de YCloud). Van arriba de todo: cambiar de
+     pestaña es entrar a otra sección; todo el panel de abajo pasa a ser de ese número. */
+  .canaltabs{display:flex;gap:0;background:var(--panel);border-bottom:1px solid var(--line);
+    padding:0 10px;overflow-x:auto;scrollbar-width:none}
+  .canaltabs::-webkit-scrollbar{display:none}
+  .canaltabs button{background:transparent;border:0;border-bottom:2px solid transparent;
+    color:var(--mut);padding:11px 16px;font-size:13px;cursor:pointer;white-space:nowrap;
+    display:flex;align-items:center;gap:7px;font-family:var(--mono)}
+  .canaltabs button:hover{color:var(--tx)}
+  .canaltabs button.on{color:var(--tx);border-bottom-color:var(--senal);
+    background:linear-gradient(180deg,rgba(200,87,30,.10),transparent)}
+  .canaltabs button .tot{font-size:11px;opacity:.75}
+  .canaltabs button .esp{color:var(--senal);font-size:11px}
+  .canaltabs .sep{flex:1}
+  /* Aviso: la sección todavía es común a los dos canales (Etapas 2 y 3). */
+  .comun{background:rgba(200,87,30,.10);border:1px solid var(--line);border-left:3px solid var(--senal);
+    border-radius:var(--r);padding:9px 12px;margin-bottom:12px;font-size:12.5px;color:var(--tx)}
   .chat .cch{font-family:var(--mono);font-size:9.5px;color:var(--mut);border:1px solid var(--line);
     border-radius:4px;padding:0 4px;margin-left:5px;opacity:.85}
   /* Quién habló último en la conversación: sin esto no se sabía si el bot contestó. */
@@ -332,6 +341,10 @@ PANEL_HTML = r"""<!doctype html>
     <button class="kbtn" id="pwbtn" onclick="toggleGlobal()"><span id="pwico">⏸</span><span class="lbl" id="pwlbl">Pausar bot</span></button>
   </header>
 
+  <!-- Pestañas de CANAL, arriba de todo: al cambiar de pestaña, todo el panel de
+       abajo pasa a ser de ese número de YCloud. -->
+  <div class="canaltabs" id="canaltabs"></div>
+
   <div id="tokbar">
     <span>🔒 Token del panel:</span>
     <input id="tokin" type="password" placeholder="PANEL_TOKEN"/>
@@ -356,7 +369,6 @@ PANEL_HTML = r"""<!doctype html>
         <div class="conv">
           <div class="chats">
             <div class="chdr"><span class="eyebrow">Conversaciones</span><span class="c mono" id="chcount">0</span><button class="col" title="Colapsar">‹</button></div>
-            <div class="canales" id="canales"></div>
             <div id="chats"><div class="empty">Cargando…</div></div>
           </div>
           <div class="thread">
@@ -496,6 +508,7 @@ document.querySelectorAll('nav.side .it').forEach(b=>b.onclick=()=>{
   document.querySelectorAll('nav.side .it').forEach(x=>x.classList.remove('active')); b.classList.add('active');
   document.querySelectorAll('.view').forEach(v=>v.classList.remove('active')); $('#v-'+b.dataset.v).classList.add('active');
   if(b.dataset.v==='config') loadCfg(); if(b.dataset.v==='prompt') loadPrompt(); if(b.dataset.v==='aprendizaje') loadAprendizaje();
+  marcarComun();  // el aviso de "esto es común a los dos canales" se re-pinta al entrar
   if(b.dataset.v==='alertas'){ alertCount=0; renderBadge(); if(b.dataset.filtro){ setFiltro(b.dataset.filtro); } }
 });
 
@@ -523,7 +536,7 @@ async function loadChats(){ try{ const d=await api('/chats'); chatsCache=d.chats
   CANALES=d.canales||[]; renderCanales();
   // Si el canal elegido ya no existe (se renombró o no tiene chats), volver a Todos.
   if(canalSel && !CANALES.some(c=>c.canal===canalSel)){ canalSel=''; localStorage.setItem('panel_canal',''); renderCanales(); }
-  renderChats(); loadStats(); }catch(e){} }
+  renderChats(); loadStats(); marcarComun(); }catch(e){} }
 let _chatsSig='';
 // ---- Canales (los dos números de YCloud) ----
 // El panel se divide por canal: cada número tiene sus conversaciones. La elección
@@ -532,15 +545,36 @@ let CANALES=[], canalSel=localStorage.getItem('panel_canal')||'';
 function chatsDelCanal(){ return canalSel ? chatsCache.filter(c=>(c.canal||'')===canalSel) : chatsCache; }
 function eventoDelCanal(e){ if(!canalSel) return true;
   const n=String(e.emisor||'').replace(/\D/g,'').slice(-10); return n===canalSel; }
+function nombreCanalSel(){ const c=CANALES.find(x=>x.canal===canalSel); return c?c.nombre:'Todos los canales'; }
 function setCanal(id){ canalSel=id; localStorage.setItem('panel_canal',id);
-  _chatsSig=''; renderCanales(); renderChats(); loadStats(); renderFiltros(); renderFeed(); }
-function renderCanales(){ const el=$('#canales'); if(!el)return;
-  if(!CANALES.length){ el.innerHTML=''; return; }
+  _chatsSig=''; cerrarHilo(); renderCanales(); renderChats(); loadStats();
+  renderFiltros(); renderFeed(); marcarComun(); }
+function renderCanales(){ const el=$('#canaltabs'); if(!el)return;
+  if(CANALES.length<2){ el.style.display='none'; return; }  // un solo número: sin pestañas
+  el.style.display='flex';
   const tot=CANALES.reduce((a,c)=>a+(c.total||0),0);
   const esp=CANALES.reduce((a,c)=>a+(c.esperando||0),0);
-  const chip=(id,nombre,t,e)=>`<button class="${canalSel===id?'on':''}" onclick="setCanal('${id}')"
-    title="${e} esperando respuesta">${esc(nombre)} <b>${t}</b>${e?`<span class="esp">·${e}</span>`:''}</button>`;
-  el.innerHTML=chip('','Todos',tot,esp)+CANALES.map(c=>chip(c.canal,c.nombre,c.total,c.esperando)).join('');
+  const tab=(id,nombre,t,e)=>`<button class="${canalSel===id?'on':''}" onclick="setCanal('${id}')"
+    title="${t} conversaciones · ${e} esperando respuesta">${esc(nombre)}
+    <span class="tot">${t}</span>${e?`<span class="esp">·${e}</span>`:''}</button>`;
+  el.innerHTML=CANALES.map(c=>tab(c.canal,c.nombre,c.total,c.esperando)).join('')
+    +tab('','Todos',tot,esp);
+}
+// Honestidad: Config, Prompt y Aprendizaje TODAVÍA son comunes a los dos números
+// (eso se separa en las Etapas 2 y 3). Sin este aviso, alguien podría cambiar un
+// precio creyendo que aplica sólo al canal en el que está.
+const SECCIONES_COMUNES={config:'la configuración del negocio',prompt:'los prompts de los agentes',aprendizaje:'las reglas y el aprendizaje'};
+function marcarComun(){
+  for(const [v,qué] of Object.entries(SECCIONES_COMUNES)){
+    const sec=$('#v-'+v); if(!sec) continue;
+    let av=sec.querySelector('.comun');
+    if(canalSel){
+      if(!av){ av=document.createElement('div'); av.className='comun';
+        const pane=sec.querySelector('.pane')||sec; pane.insertBefore(av,pane.firstChild); }
+      av.innerHTML='⚠️ Estás en <b>'+esc(nombreCanalSel())+'</b>, pero '+qué+
+        ' todavía es <b>común a los dos números</b>: lo que cambies acá aplica a ambos.';
+    } else if(av){ av.remove(); }
+  }
 }
 // Prefijo de quién habló último en la conversación (el cliente, el bot o un asesor).
 function quienDijo(de){
