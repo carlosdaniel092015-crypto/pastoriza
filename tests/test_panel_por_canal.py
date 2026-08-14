@@ -29,8 +29,14 @@ def cliente(monkeypatch):
     from app.main import app
     from app.panel import agentes_custom, conocimiento, prompt_store
 
+    from app.panel import router as panel_router_mod
+
     fake = FakeRedis()
     monkeypatch.setattr(rc, "_pool", fake)
+    # Caches de proceso del panel (scan de sesiones y último mensaje derivado): si se
+    # arrastran entre tests, uno ve los datos del anterior.
+    monkeypatch.setattr(panel_router_mod, "_cache_scan", None)
+    panel_router_mod._cache_ultimo.clear()
     fake.kv[bc.CONFIG_KEY] = json.dumps(
         {"precio_envio": "550", "monto_minimo": "1000", "canales": CANALES}
     )
@@ -103,6 +109,49 @@ class TestPestanas:
         assert {c["ultimo_de"] for c in d["chats"]} == {"cliente"}
         # Orden estable de las pestañas (por número), no por cantidad.
         assert [c["canal"] for c in d["canales"]] == sorted([CA, CB])
+
+
+class TestRendimientoYFallas:
+    """La lista de chats es lo que más se refresca: no puede costar una ida a Redis
+    por conversación, ni mentir cuando Redis no responde."""
+
+    def test_una_sola_lectura_para_saber_quien_esta_pausado(self, cliente):
+        import json as _json
+
+        from app.panel import events
+
+        import app.redis_client as rc
+        fake = rc._pool
+        for i in range(30):
+            chat = f"1809666{i:04d}"
+            fake.hashes.setdefault(events.CHATMETA_KEY, {})[chat] = _json.dumps(
+                {"chat_id": chat, "emisor": A, "ultimo": "hola", "ultimo_de": "bot",
+                 "ultimo_ts": 1000 + i}
+            )
+        fake.contar = True
+        fake.ops.clear()
+        d = _get(cliente, "/panel/api/chats")
+        assert d["total"] == 30
+        # Un `get` por chat serían 30+ lecturas; con MGET es una sola.
+        assert fake.ops.count("mget") == 1
+        assert fake.ops.count("get") == 0
+
+    def test_si_redis_falla_lo_dice_en_vez_de_mostrar_cero(self, cliente, monkeypatch):
+        """Regresión: "no hay conversaciones" y "Redis caído" se veían IGUAL."""
+        from app.panel import events
+
+        async def _explota(estricto: bool = False):
+            raise ConnectionError("Error 111 connecting to redis: rechazado")
+
+        monkeypatch.setattr(events, "todos_chatmeta", _explota)
+        d = _get(cliente, "/panel/api/chats")
+        assert d["chats"] == []
+        assert "ConnectionError" in d["degradado"]
+        # Las pestañas siguen saliendo (de la config), para poder operar.
+        assert {c["canal"] for c in d["canales"]} == {CA, CB}
+
+    def test_sin_fallas_no_marca_degradado(self, cliente):
+        assert _get(cliente, "/panel/api/chats")["degradado"] == ""
 
 
 class TestConfig:

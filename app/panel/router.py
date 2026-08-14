@@ -46,6 +46,7 @@ from app.estado import (
     bot_pausado,
     encolar_revision,
     listar_revision,
+    pausados,
     pausar_bot,
     reactivar_bot,
     set_bot_global,
@@ -170,7 +171,19 @@ async def api_bot_set(
 
 
 # ------------------------------------------------------------- chats ---
+# El SCAN de las sesiones recorre TODO el keyspace y sólo sirve para las
+# conversaciones que tienen historial pero no están en el índice del panel (chats
+# viejos, de antes de `chatmeta`). No hace falta repetirlo en cada refresco.
+_TTL_SCAN = 30.0
+_cache_scan: tuple[float, list[str]] | None = None
+
+
 async def _chat_ids_de_sesiones() -> list[str]:
+    global _cache_scan
+    ahora = time.monotonic()
+    if _cache_scan and (ahora - _cache_scan[0]) < _TTL_SCAN:
+        return _cache_scan[1]
+
     prefijo = settings.key("session", "")
 
     async def _op(r: Any) -> list[str]:
@@ -182,16 +195,38 @@ async def _chat_ids_de_sesiones() -> list[str]:
     try:
         keys = await with_reconnect(_op)
     except Exception:  # noqa: BLE001
-        return []
-    return [k[len(prefijo):] for k in keys]
+        return _cache_scan[1] if _cache_scan else []
+    ids = [k[len(prefijo):] for k in keys]
+    _cache_scan = (ahora, ids)
+    return ids
 
 
-async def _ultimo_del_historial(chat_id: str, respaldo: str = "") -> tuple[str, str]:
+# Lo derivado del historial se cachea por chat + marca de tiempo del último mensaje:
+# mientras no entre nada nuevo, el resultado no puede cambiar. Sin esto, cada refresco
+# de la lista releía el historial de TODOS los chats viejos (uno por uno).
+_cache_ultimo: dict[str, tuple[float, tuple[str, str]]] = {}
+_MAX_CACHE_ULTIMO = 2000
+
+
+async def _ultimo_del_historial(
+    chat_id: str, respaldo: str = "", version: float = 0.0
+) -> tuple[str, str]:
     """(texto, quién) del último mensaje real de la conversación, leído del historial.
 
     Se usa para las conversaciones que ya existían antes de guardar `ultimo_de`.
     Devuelve `respaldo` si no se puede leer: nunca rompe la lista de chats.
     """
+    hit = _cache_ultimo.get(chat_id)
+    if hit and hit[0] == version:
+        return hit[1]
+    fila = await _leer_ultimo_del_historial(chat_id, respaldo)
+    if len(_cache_ultimo) >= _MAX_CACHE_ULTIMO:
+        _cache_ultimo.clear()
+    _cache_ultimo[chat_id] = (version, fila)
+    return fila
+
+
+async def _leer_ultimo_del_historial(chat_id: str, respaldo: str = "") -> tuple[str, str]:
     try:
         items = await RedisSession(chat_id).get_items(limit=6)
     except Exception:  # noqa: BLE001
@@ -224,7 +259,15 @@ async def _ultimo_del_historial(chat_id: str, respaldo: str = "") -> tuple[str, 
 @panel_router.get("/api/chats")
 async def api_chats(x_panel_token: str | None = Header(default=None)) -> dict:
     _auth(x_panel_token)
-    meta = await events.todos_chatmeta()
+    # DEGRADADO: si no se puede LEER el índice, la lista sale vacía — y "no hay
+    # conversaciones" se veía igual que "Redis está caído". El panel tiene que poder
+    # distinguirlo, así que el fallo se reporta en vez de tragarse.
+    degradado = ""
+    try:
+        meta = await events.todos_chatmeta(estricto=True)
+    except Exception as exc:  # noqa: BLE001
+        log.error("panel_chats_sin_indice", error=str(exc))
+        meta, degradado = {}, f"{type(exc).__name__}: {exc}"[:200]
     ids = set(meta.keys()) | set(await _chat_ids_de_sesiones())
     # Nombres de los canales (números de YCloud) para mostrar en el panel.
     mapa_canales = parsear_canales((await load_config()).canales)
@@ -235,6 +278,10 @@ async def api_chats(x_panel_token: str | None = Header(default=None)) -> dict:
         num: {"canal": num, "nombre": nombre, "total": 0, "esperando": 0, "en_asesor": 0}
         for num, nombre in mapa_canales.items()
     }
+    # UNA sola ida a Redis para saber qué chats están en control humano (antes era
+    # un `get` por conversación: cientos de idas y vueltas en cada refresco).
+    en_pausa = await pausados(sorted(ids))
+
     async def _fila(cid: str) -> dict:
         m = meta.get(cid, {})
         ultimo = m.get("ultimo", "")
@@ -242,12 +289,11 @@ async def api_chats(x_panel_token: str | None = Header(default=None)) -> dict:
         if not ultimo_de:
             # Conversación anterior a que se guardara quién habló último (o sin meta):
             # lo deducimos del historial para que la lista sea correcta YA, sin
-            # esperar a que llegue un mensaje nuevo.
-            pausado, (ultimo, ultimo_de) = await asyncio.gather(
-                bot_pausado(cid), _ultimo_del_historial(cid, ultimo)
+            # esperar a que llegue un mensaje nuevo. Se cachea por `ultimo_ts`: no
+            # puede cambiar mientras no entre un mensaje nuevo.
+            ultimo, ultimo_de = await _ultimo_del_historial(
+                cid, ultimo, version=float(m.get("ultimo_ts") or 0)
             )
-        else:
-            pausado = await bot_pausado(cid)
         # Canal = número NUESTRO por el que entró la conversación.
         emisor = str(m.get("emisor") or "")
         return {
@@ -257,14 +303,14 @@ async def api_chats(x_panel_token: str | None = Header(default=None)) -> dict:
             "ultimo": ultimo,
             "ultimo_de": ultimo_de or "cliente",
             "ultimo_ts": m.get("ultimo_ts", 0),
-            "pausado": pausado,
+            "pausado": cid in en_pausa,
             "canal": norm_num(emisor),
             "canal_nombre": nombre_canal(emisor, mapa_canales),
         }
 
-    # EN PARALELO: cada chat son 1-2 lecturas a Redis y en serie, con Redis remoto y
-    # muchas conversaciones, la lista tardaba tanto que el panel se quedaba en
-    # "Cargando…" (sin pestañas, porque se pintan al terminar esta llamada).
+    # EN PARALELO: lo que queda por chat (reconstruir el último mensaje de los chats
+    # viejos) va concurrente; en serie, con Redis remoto y muchas conversaciones, la
+    # lista tardaba tanto que el panel se quedaba en "Cargando…".
     chats = list(await asyncio.gather(*(_fila(cid) for cid in ids)))
 
     for c in chats:
@@ -284,7 +330,14 @@ async def api_chats(x_panel_token: str | None = Header(default=None)) -> dict:
     # Orden estable (por número): las pestañas no deben saltar de lugar cuando entra
     # una conversación y un canal pasa al otro en cantidad.
     canales = sorted(resumen.values(), key=lambda c: c["canal"])
-    return {"total": len(chats), "chats": chats, "canales": canales}
+    return {
+        "total": len(chats),
+        "chats": chats,
+        "canales": canales,
+        # Vacío = todo bien. Con texto = no se pudo leer el índice (Redis): la lista
+        # está vacía por FALLA, no porque no haya conversaciones.
+        "degradado": degradado,
+    }
 
 
 @panel_router.get("/api/chats/{chat_id}")
