@@ -532,6 +532,7 @@ async def _puntuar(chat_id: str, texto: str, ctx: ConversationContext) -> dict:
             cotizado_unidades=ctx.cotizado_unidades,
             cotizado_total=ctx.cotizado_total,
             cotizado_modalidad=ctx.cotizado_modalidad,
+            pedido_modalidad=ctx.pedido_modalidad,
             monto_minimo=_monto_minimo(ctx.cfg),
         )
         return score.puntuar(previos, nuevos)

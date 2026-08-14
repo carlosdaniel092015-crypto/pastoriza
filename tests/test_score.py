@@ -132,17 +132,40 @@ class TestPuntajeYSemaforo:
         quedaba como "cerca de cerrar", que es falso: el pedido ya existe en Odoo.
         """
         p = score.puntuar([], {"pedido", "lineas", "contacto", "cotizo",
-                               "sobre_minimo", "dio_direccion"})
+                               "sobre_minimo", "dio_direccion", "entrega_retiro"})
         assert p["sem"] == "cerrado"
-        # Pero el pago pendiente NO se esconde: se marca aparte.
+        # Y en RETIRO no se avisa nada: ahí no se pide comprobante (regla del negocio).
+        assert score.falta_pago(p["hitos"]) is False
+
+    def test_en_envio_sin_comprobante_si_se_avisa(self):
+        """En envío el despacho espera la transferencia: eso hay que verlo."""
+        p = score.puntuar([], {"pedido", "lineas", "entrega_envio"})
+        assert p["sem"] == "cerrado"
         assert score.falta_pago(p["hitos"]) is True
 
-    def test_falta_pago_solo_aplica_si_hay_pedido(self):
+    def test_falta_pago_solo_en_envio_y_solo_con_pedido(self):
         assert score.falta_pago(["cotizo", "pidio_cuentas"]) is False
         assert score.falta_pago([]) is False
         assert score.falta_pago(None) is False
-        assert score.falta_pago(["pedido"]) is True
-        assert score.falta_pago(["pedido", "dijo_pago"]) is False
+        assert score.falta_pago(["pedido"]) is False            # modalidad desconocida
+        assert score.falta_pago(["pedido", "entrega_retiro"]) is False
+        assert score.falta_pago(["pedido", "entrega_envio"]) is True
+        assert score.falta_pago(["pedido", "entrega_envio", "dijo_pago"]) is False
+        assert score.falta_pago(["pedido", "entrega_envio", "comprobante"]) is False
+
+    def test_la_modalidad_no_suma_puntos(self):
+        """Retirar en tienda no es mejor ni peor que un envío: informa, no puntúa."""
+        base = score.puntuar([], {"cotizo"})
+        con_retiro = score.puntuar([], {"cotizo", "entrega_retiro"})
+        con_envio = score.puntuar([], {"cotizo", "entrega_envio"})
+        assert base["score"] == con_retiro["score"] == con_envio["score"]
+        assert "Retiro en tienda" in score.etiquetas(con_retiro["hitos"])
+
+    def test_la_modalidad_del_pedido_manda_sobre_la_de_la_cotizacion(self):
+        """Cotizó envío pero terminó retirando: vale la del pedido."""
+        h = score.detectar("", order_id=160, cotizado_unidades=10, cotizado_total=1.0,
+                           cotizado_modalidad="envio", pedido_modalidad="retiro")
+        assert "entrega_retiro" in h and "entrega_envio" not in h
 
     def test_el_puntaje_no_pasa_de_100(self):
         p = score.puntuar([], set(score.PESOS))
@@ -164,14 +187,14 @@ class TestPuntajeYSemaforo:
 
 class TestEtiquetas:
     def test_cada_hito_tiene_texto_para_el_operador(self):
-        for h in score.PESOS:
+        for h in {**score.PESOS, **score.INFO}:
             assert score.etiquetas([h]) and score.etiquetas([h])[0]
 
     def test_ningun_texto_juzga_a_la_persona(self):
         """Una captura del panel circula por WhatsApp: nada que dé vergüenza."""
         prohibidas = ("pierde", "basura", "no compra", "malo", "inutil", "spam",
                       "sospechoso", "mentiroso", "pobre")
-        for _, etiqueta in score.PESOS.values():
+        for etiqueta in [e for _, e in score.PESOS.values()] + list(score.INFO.values()):
             bajo = etiqueta.lower()
             assert not any(p in bajo for p in prohibidas), etiqueta
         for texto in ("verde", "amarillo", "gris", "cerrado"):
@@ -282,7 +305,8 @@ class TestReconstruirDesdeHistorial:
             monto_minimo=1000.0,
         )
         assert set(p["hitos"]) == {
-            "cotizo", "sobre_minimo", "eligio_entrega", "pidio_cuentas", "contacto"
+            "cotizo", "sobre_minimo", "eligio_entrega", "entrega_envio",
+            "pidio_cuentas", "contacto",
         }
         assert p["sem"] == "verde"
 
@@ -353,6 +377,26 @@ class TestReconstruirDesdeHistorial:
                       [_out("COTIZACION (para mostrar al cliente):\nTOTAL: RD$")]):
             p = score.reconstruir(items, 1000.0)
             assert set(p) == {"score", "sem", "hitos"}
+
+    def test_retiro_en_tienda_no_pide_comprobante(self):
+        """La cotización de retiro dice "Retiro en tienda": de ahí sale la modalidad."""
+        retiro = COTIZACION.replace("Envio: RD$550.00", "Retiro en tienda (sin costo de envio)")
+        p = score.reconstruir([
+            _out(retiro),
+            {"type": "function_call", "call_id": "c9", "name": "crear_pedido",
+             "arguments": '{"modalidad":"retiro"}'},
+            _out("OK: pedido creado con número 160. Ahora agrega las líneas"),
+        ], monto_minimo=1000.0)
+        assert p["sem"] == "cerrado"
+        assert score.falta_pago(p["hitos"]) is False
+        assert "Retiro en tienda" in score.etiquetas(p["hitos"])
+
+    def test_envio_sin_comprobante_se_avisa(self):
+        p = score.reconstruir([
+            _out(COTIZACION),  # trae "Envio: RD$550.00"
+            _out("OK: pedido creado con número 161. Ahora agrega las líneas"),
+        ], monto_minimo=1000.0)
+        assert score.falta_pago(p["hitos"]) is True
 
     def test_contenido_en_lista_tambien_se_lee(self):
         p = score.reconstruir(

@@ -295,7 +295,13 @@ async def crear_pedido(
         },
     )
     c.order_id = int(order_id)
-    log.info("pedido_creado", chat_id=c.chat_id, order_id=order_id)
+    # Modalidad real del pedido: la usa el panel para saber si hay que esperar la
+    # transferencia (envío) o si se paga en el mostrador (retiro, no lleva comprobante).
+    c.pedido_modalidad = "envio" if m.startswith("env") else "retiro"
+    log.info(
+        "pedido_creado", chat_id=c.chat_id, order_id=order_id,
+        modalidad=c.pedido_modalidad,
+    )
     return (
         f"OK: pedido creado con número {order_id}. Ahora agrega las líneas con "
         "agregar_linea_pedido. Puedes confirmarle al cliente que su pedido quedó "
