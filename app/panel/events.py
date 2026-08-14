@@ -39,6 +39,15 @@ async def publicar(kind: str, chat_id: str, **data: Any) -> dict:
     if eid is None:
         eid = int(time.time() * 1000)
 
+    # Canal (número nuestro por el que entró la conversación): el panel se divide
+    # por canal, así que cada evento debe saber a cuál pertenece. Si quien publica
+    # no lo pasó, se toma de la meta del chat en vez de exigirlo en cada llamada.
+    if not data.get("emisor") and chat_id and chat_id != "-":
+        try:
+            data["emisor"] = (await leer_chatmeta(chat_id)).get("emisor", "") or ""
+        except Exception:  # noqa: BLE001
+            data["emisor"] = ""
+
     evt: dict[str, Any] = {
         "id": eid,
         "ts": time.time(),

@@ -101,6 +101,16 @@ PANEL_HTML = r"""<!doctype html>
   .chat .n.num{font-family:var(--mono);font-weight:500;letter-spacing:-.02em}
   .chat .h{font-family:var(--mono);font-size:11px;color:var(--mut)}
   .chat .m{color:var(--mut);font-size:13px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  /* Canales (los dos números de YCloud): cada uno con sus conversaciones. */
+  .canales{display:flex;gap:5px;padding:7px 10px;border-bottom:1px solid var(--line);flex-wrap:wrap}
+  .canales button{background:var(--panel2);border:1px solid var(--line);color:var(--mut);
+    padding:5px 9px;border-radius:999px;font-size:11.5px;font-family:var(--mono);cursor:pointer;display:flex;gap:5px;align-items:center}
+  .canales button:hover{color:var(--tx)}
+  .canales button.on{border-color:var(--senal);color:var(--tx);background:linear-gradient(180deg,rgba(200,87,30,.16),transparent)}
+  .canales button b{font-weight:600}
+  .canales button .esp{color:var(--senal)}
+  .chat .cch{font-family:var(--mono);font-size:9.5px;color:var(--mut);border:1px solid var(--line);
+    border-radius:4px;padding:0 4px;margin-left:5px;opacity:.85}
   /* Quién habló último en la conversación: sin esto no se sabía si el bot contestó. */
   .chat .quien{font-family:var(--mono);font-size:10.5px;text-transform:uppercase;letter-spacing:.04em}
   .chat .quien.bot{color:var(--senal)}
@@ -346,6 +356,7 @@ PANEL_HTML = r"""<!doctype html>
         <div class="conv">
           <div class="chats">
             <div class="chdr"><span class="eyebrow">Conversaciones</span><span class="c mono" id="chcount">0</span><button class="col" title="Colapsar">‹</button></div>
+            <div class="canales" id="canales"></div>
             <div id="chats"><div class="empty">Cargando…</div></div>
           </div>
           <div class="thread">
@@ -499,15 +510,38 @@ async function toggleGlobal(){ const on=$('#pwlabel').textContent!=='Bot activo'
 // stats
 async function loadStats(){
   const hoy=new Date(); hoy.setHours(0,0,0,0); const t0=hoy.getTime()/1000;
-  const chatsHoy=chatsCache.filter(c=>(c.ultimo_ts||0)>=t0).length||chatsCache.length;
-  const asesor=chatsCache.filter(c=>c.pausado).length;
+  // Las estadísticas del header respetan el canal elegido.
+  const base=chatsDelCanal();
+  const chatsHoy=base.filter(c=>(c.ultimo_ts||0)>=t0).length||base.length;
+  const asesor=base.filter(c=>c.pausado).length;
   $('#stChats').textContent=chatsHoy; $('#stAsesor').textContent=asesor;
   try{ const r=await api('/revision?limite=200'); $('#stRev').textContent=r.total||0; }catch(e){}
 }
 
 // conversaciones
-async function loadChats(){ try{ const d=await api('/chats'); chatsCache=d.chats; renderChats(); loadStats(); }catch(e){} }
+async function loadChats(){ try{ const d=await api('/chats'); chatsCache=d.chats;
+  CANALES=d.canales||[]; renderCanales();
+  // Si el canal elegido ya no existe (se renombró o no tiene chats), volver a Todos.
+  if(canalSel && !CANALES.some(c=>c.canal===canalSel)){ canalSel=''; localStorage.setItem('panel_canal',''); renderCanales(); }
+  renderChats(); loadStats(); }catch(e){} }
 let _chatsSig='';
+// ---- Canales (los dos números de YCloud) ----
+// El panel se divide por canal: cada número tiene sus conversaciones. La elección
+// se recuerda, así que si atendés siempre uno, entrás y ya está filtrado.
+let CANALES=[], canalSel=localStorage.getItem('panel_canal')||'';
+function chatsDelCanal(){ return canalSel ? chatsCache.filter(c=>(c.canal||'')===canalSel) : chatsCache; }
+function eventoDelCanal(e){ if(!canalSel) return true;
+  const n=String(e.emisor||'').replace(/\D/g,'').slice(-10); return n===canalSel; }
+function setCanal(id){ canalSel=id; localStorage.setItem('panel_canal',id);
+  _chatsSig=''; renderCanales(); renderChats(); loadStats(); renderFiltros(); renderFeed(); }
+function renderCanales(){ const el=$('#canales'); if(!el)return;
+  if(!CANALES.length){ el.innerHTML=''; return; }
+  const tot=CANALES.reduce((a,c)=>a+(c.total||0),0);
+  const esp=CANALES.reduce((a,c)=>a+(c.esperando||0),0);
+  const chip=(id,nombre,t,e)=>`<button class="${canalSel===id?'on':''}" onclick="setCanal('${id}')"
+    title="${e} esperando respuesta">${esc(nombre)} <b>${t}</b>${e?`<span class="esp">·${e}</span>`:''}</button>`;
+  el.innerHTML=chip('','Todos',tot,esp)+CANALES.map(c=>chip(c.canal,c.nombre,c.total,c.esperando)).join('');
+}
 // Prefijo de quién habló último en la conversación (el cliente, el bot o un asesor).
 function quienDijo(de){
   if(de==='bot') return '<span class="quien bot">Bot:</span> ';
@@ -515,18 +549,21 @@ function quienDijo(de){
   return '';
 }
 function renderChats(){
-  const sig=JSON.stringify(chatsCache.map(c=>[c.chat_id,c.ultimo,c.ultimo_de,c.ultimo_ts,c.pausado]))+'|'+selChat;
+  const lista=chatsDelCanal();
+  const sig=JSON.stringify(lista.map(c=>[c.chat_id,c.ultimo,c.ultimo_de,c.ultimo_ts,c.pausado]))+'|'+selChat+'|'+canalSel;
   if(sig===_chatsSig) return; _chatsSig=sig;
-  $('#chcount').textContent=chatsCache.length;
+  $('#chcount').textContent=lista.length;
   const el=$('#chats');
-  if(!chatsCache.length){ el.innerHTML='<div class="empty">Sin conversaciones aún.</div>'; return; }
-  el.innerHTML=chatsCache.map(c=>{
+  if(!lista.length){ el.innerHTML='<div class="empty">'+(canalSel?'Este canal no tiene conversaciones.':'Sin conversaciones aún.')+'</div>'; return; }
+  el.innerHTML=lista.map(c=>{
     const nombre=c.user_name||c.chat_id;
     const dot=c.pausado?'<span class="adot" title="en control humano"></span>':'';
     const tag=esTest(c.chat_id)?'<span class="ttag">PRUEBA</span>':'';
+    // Con "Todos" se muestra de qué número entró; dentro de un canal sobra.
+    const cch=(!canalSel&&c.canal_nombre)?`<span class="cch" title="Entró por ${esc(c.canal_nombre)}">${esc(c.canal_nombre)}</span>`:'';
     return `<button class="chat ${c.chat_id===selChat?'sel':''}" onclick="openChat('${c.chat_id}')">
       <div class="top"><span class="n ${esNum(nombre)?'num':''}">${esc(nombre)}</span>${tag}<span class="h">${fmtRel(c.ultimo_ts)}</span>${dot}</div>
-      <div class="m">${quienDijo(c.ultimo_de)}${esc(c.ultimo)||'—'}</div></button>`;
+      <div class="m">${quienDijo(c.ultimo_de)}${esc(c.ultimo)||'—'}${cch}</div></button>`;
   }).join('');
 }
 function abrirVistaHilo(){ const c=document.querySelector('.conv'); if(c)c.classList.add('show-thread'); document.body.classList.add('thread-open'); }
@@ -656,7 +693,7 @@ function renderBadge(){ const b=$('#badge'); if(alertCount>0){b.style.display='b
 const FGRUPO={todos:()=>true, turn:e=>e.kind==='turn', cambios:e=>['control','manual','order'].includes(e.kind),
   revisar:e=>['revision','handoff','comprobante_sin_pedido'].includes(e.kind), error:e=>e.kind==='error'};
 const FTABS=[['todos','Todo'],['turn','Respuestas'],['cambios','Cambios'],['revisar','Revisar'],['error','Errores']];
-function renderFiltros(){ $('#filtros').innerHTML=FTABS.map(([k,l])=>{ const n=alerts.filter(FGRUPO[k]).length;
+function renderFiltros(){ $('#filtros').innerHTML=FTABS.map(([k,l])=>{ const n=alerts.filter(e=>FGRUPO[k](e)&&eventoDelCanal(e)).length;
   return `<button class="${filtro===k?'on':''}" onclick="setFiltro('${k}')">${l}<b>${n}</b></button>`; }).join(''); }
 function setFiltro(t){ filtro=t; renderFiltros(); renderFeed(); }
 function nombreDe(e){ return esc(e.user_name)||esc(e.chat_id)||'un cliente'; }
@@ -664,7 +701,8 @@ function traducirError(det){ det=det||''; if(/connection|redis|network|memoria|t
 function verConv(id){ document.querySelector('nav.side .it[data-v=conv]').click(); openChat(id); }
 function renderFeed(){
   const el=$('#feed');
-  let lista=alerts.filter(FGRUPO[filtro]||(()=>true));
+  // Logs también divididos por canal (usa el `emisor` que ahora trae cada evento).
+  let lista=alerts.filter(e=>(FGRUPO[filtro]||(()=>true))(e)&&eventoDelCanal(e));
   if(!lista.length){ el.innerHTML='<div class="empty">Nada por aquí. Todo marcha según lo esperado.</div>'; return; }
   let html='',dia='';
   for(const e of lista){ let d=fmtDay(e.ts); const hoy=fmtDay(Date.now()/1000);
