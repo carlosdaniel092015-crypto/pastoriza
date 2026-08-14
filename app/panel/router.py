@@ -5,6 +5,7 @@ se permite todo (solo para desarrollo local).
 """
 from __future__ import annotations
 
+import asyncio
 import hmac
 import json
 import secrets
@@ -234,42 +235,48 @@ async def api_chats(x_panel_token: str | None = Header(default=None)) -> dict:
         num: {"canal": num, "nombre": nombre, "total": 0, "esperando": 0, "en_asesor": 0}
         for num, nombre in mapa_canales.items()
     }
-    chats = []
-    for cid in ids:
+    async def _fila(cid: str) -> dict:
         m = meta.get(cid, {})
-        pausado = await bot_pausado(cid)
         ultimo = m.get("ultimo", "")
         ultimo_de = m.get("ultimo_de", "")
         if not ultimo_de:
             # Conversación anterior a que se guardara quién habló último (o sin meta):
             # lo deducimos del historial para que la lista sea correcta YA, sin
             # esperar a que llegue un mensaje nuevo.
-            ultimo, ultimo_de = await _ultimo_del_historial(cid, ultimo)
+            pausado, (ultimo, ultimo_de) = await asyncio.gather(
+                bot_pausado(cid), _ultimo_del_historial(cid, ultimo)
+            )
+        else:
+            pausado = await bot_pausado(cid)
         # Canal = número NUESTRO por el que entró la conversación.
         emisor = str(m.get("emisor") or "")
-        canal_id = norm_num(emisor)
-        chats.append(
-            {
-                "chat_id": cid,
-                "user_name": m.get("user_name", ""),
-                "telefono": m.get("telefono", ""),
-                "ultimo": ultimo,
-                "ultimo_de": ultimo_de or "cliente",
-                "ultimo_ts": m.get("ultimo_ts", 0),
-                "pausado": pausado,
-                "canal": canal_id,
-                "canal_nombre": nombre_canal(emisor, mapa_canales),
-            }
-        )
+        return {
+            "chat_id": cid,
+            "user_name": m.get("user_name", ""),
+            "telefono": m.get("telefono", ""),
+            "ultimo": ultimo,
+            "ultimo_de": ultimo_de or "cliente",
+            "ultimo_ts": m.get("ultimo_ts", 0),
+            "pausado": pausado,
+            "canal": norm_num(emisor),
+            "canal_nombre": nombre_canal(emisor, mapa_canales),
+        }
+
+    # EN PARALELO: cada chat son 1-2 lecturas a Redis y en serie, con Redis remoto y
+    # muchas conversaciones, la lista tardaba tanto que el panel se quedaba en
+    # "Cargando…" (sin pestañas, porque se pintan al terminar esta llamada).
+    chats = list(await asyncio.gather(*(_fila(cid) for cid in ids)))
+
+    for c in chats:
         r = resumen.setdefault(
-            canal_id,
-            {"canal": canal_id, "nombre": nombre_canal(emisor, mapa_canales),
+            c["canal"],
+            {"canal": c["canal"], "nombre": c["canal_nombre"],
              "total": 0, "esperando": 0, "en_asesor": 0},
         )
         r["total"] += 1
-        if pausado:
+        if c["pausado"]:
             r["en_asesor"] += 1
-        elif (ultimo_de or "cliente") == "cliente":
+        elif c["ultimo_de"] == "cliente":
             # El cliente escribió y nadie contestó todavía.
             r["esperando"] += 1
 

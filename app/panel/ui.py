@@ -44,10 +44,18 @@ PANEL_HTML = r"""<!doctype html>
   ::selection{background:var(--senal);color:#fff}
   :focus-visible{outline:2px solid var(--senal);outline-offset:1px}
 
-  .app{display:grid;grid-template-rows:56px 1fr;height:100vh;height:100dvh}
+  /* FLEX, no grid con filas contadas: los hijos son header · pestañas de canal ·
+     barra de token · cuerpo, y la barra de token está `display:none` casi siempre.
+     Con `grid-template-rows` la fila elástica se le asignaba al hijo equivocado
+     (quedaba media pantalla en negro y el cuerpo encogido al alto de su contenido),
+     y cambiaba según cuántos hijos estuvieran visibles. Con flex, el cuerpo se queda
+     con lo que sobre, sin importar quién esté oculto. */
+  .app{display:flex;flex-direction:column;height:100vh;height:100dvh}
+  .app>header,.app>.canaltabs,.app>#tokbar{flex:none}
+  .app>.body{flex:1;min-height:0}
 
   /* Header */
-  header{display:flex;align-items:center;gap:18px;padding:0 18px;background:var(--panel);border-bottom:1px solid var(--line);
+  header{height:56px;box-sizing:border-box;display:flex;align-items:center;gap:18px;padding:0 18px;background:var(--panel);border-bottom:1px solid var(--line);
     padding-left:max(18px,env(safe-area-inset-left));padding-right:max(18px,env(safe-area-inset-right))}
   .hbtn{width:36px;height:36px;flex:none;display:inline-flex;align-items:center;justify-content:center;border-radius:8px;border:1px solid var(--line);background:var(--panel2);color:var(--mut);font-size:16px;position:relative}
   .hbtn:hover{border-color:var(--senal);color:var(--tx)}
@@ -549,7 +557,16 @@ async function loadChats(){ try{ const d=await api('/chats'); chatsCache=d.chats
   CANALES=d.canales||[]; renderCanales();
   // Si el canal elegido ya no existe (se renombró o no tiene chats), volver a Todos.
   if(canalSel && !CANALES.some(c=>c.canal===canalSel)){ canalSel=''; localStorage.setItem('panel_canal',''); renderCanales(); }
-  renderChats(); loadStats(); marcarComun(); }catch(e){} }
+  renderChats(); loadStats(); marcarComun(); }
+  catch(e){
+    // Antes esto se tragaba el error y la lista quedaba en "Cargando…" para siempre,
+    // sin pestañas y con los contadores en 0: imposible saber qué pasó. Ahora se ve.
+    const el=$('#chats');
+    if(el && !chatsCache.length) el.innerHTML='<div class="empty">No pude cargar las conversaciones.<br>'+
+      '<span class="mono" style="font-size:11px">'+esc(String(e&&e.message||e))+'</span><br>'+
+      '<button class="btn sec sm" style="margin-top:8px" onclick="loadChats()">Reintentar</button></div>';
+    console.error('loadChats', e);
+  } }
 let _chatsSig='';
 // ---- Canales (los dos números de YCloud) ----
 // El panel se divide por canal: cada número tiene sus conversaciones. La elección

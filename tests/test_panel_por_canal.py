@@ -71,6 +71,39 @@ class TestPestanas:
         canales = {c["canal"]: c["nombre"] for c in d["canales"]}
         assert canales == {CA: "Tienda", CB: "Mayorista"}
 
+    def test_muchas_conversaciones_y_sin_ultimo_de(self, cliente):
+        """Con muchos chats viejos (sin `ultimo_de`) la lista tiene que responder igual.
+
+        Esos chats obligan a reconstruir quién habló último leyendo el historial: en
+        serie, con Redis remoto, el panel se quedaba en "Cargando…" y las pestañas no
+        aparecían nunca (se pintan cuando termina esta llamada).
+        """
+        import json as _json
+
+        from app.panel import events
+        from app.settings import settings
+
+        import app.redis_client as rc
+        fake = rc._pool
+        for i in range(40):
+            chat = f"1809555{i:04d}"
+            emisor = A if i % 2 else B
+            fake.hashes.setdefault(events.CHATMETA_KEY, {})[chat] = _json.dumps(
+                {"chat_id": chat, "emisor": emisor, "user_name": f"Cliente {i}",
+                 "ultimo": "hola", "ultimo_ts": 1000 + i}  # sin ultimo_de: caso viejo
+            )
+            fake.listas[settings.key("session", chat)] = [
+                _json.dumps({"role": "user", "content": "precio de botella 8 oz"})
+            ]
+        d = _get(cliente, "/panel/api/chats")
+        assert d["total"] == 40
+        por_canal = {c["canal"]: c["total"] for c in d["canales"]}
+        assert por_canal == {CA: 20, CB: 20}
+        # Se dedujo del historial quién habló último.
+        assert {c["ultimo_de"] for c in d["chats"]} == {"cliente"}
+        # Orden estable de las pestañas (por número), no por cantidad.
+        assert [c["canal"] for c in d["canales"]] == sorted([CA, CB])
+
 
 class TestConfig:
     def test_guardar_en_un_canal_no_toca_el_otro(self, cliente):
