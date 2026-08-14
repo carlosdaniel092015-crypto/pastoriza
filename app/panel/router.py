@@ -177,6 +177,11 @@ async def api_bot_set(
 _TTL_SCAN = 30.0
 _cache_scan: tuple[float, list[str]] | None = None
 
+# Cuántas lecturas de Redis en vuelo puede tener el panel a la vez. Deja conexiones
+# libres del pool para el BOT, que es lo que no puede esperar (hay un cliente
+# escribiendo del otro lado).
+_CONCURRENCIA = 6
+
 
 async def _chat_ids_de_sesiones() -> list[str]:
     global _cache_scan
@@ -308,10 +313,18 @@ async def api_chats(x_panel_token: str | None = Header(default=None)) -> dict:
             "canal_nombre": nombre_canal(emisor, mapa_canales),
         }
 
-    # EN PARALELO: lo que queda por chat (reconstruir el último mensaje de los chats
-    # viejos) va concurrente; en serie, con Redis remoto y muchas conversaciones, la
-    # lista tardaba tanto que el panel se quedaba en "Cargando…".
-    chats = list(await asyncio.gather(*(_fila(cid) for cid in ids)))
+    # EN PARALELO PERO ACOTADO: lo que queda por chat (reconstruir el último mensaje
+    # de los chats viejos) va concurrente, porque en serie con Redis remoto la lista
+    # tardaba tanto que el panel se quedaba en "Cargando…". El semáforo es
+    # imprescindible: sin tope, 300 chats pedían 300 conexiones a la vez y Redis
+    # respondía "max number of clients reached" a TODO, incluido el bot atendiendo.
+    limite = asyncio.Semaphore(_CONCURRENCIA)
+
+    async def _fila_acotada(cid: str) -> dict:
+        async with limite:
+            return await _fila(cid)
+
+    chats = list(await asyncio.gather(*(_fila_acotada(cid) for cid in ids)))
 
     for c in chats:
         r = resumen.setdefault(

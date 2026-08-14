@@ -18,7 +18,10 @@ from redis.exceptions import ConnectionError as RedisConnectionError
 from redis.exceptions import TimeoutError as RedisTimeoutError
 from redis.retry import Retry
 
+from app.logging_conf import get_logger
 from app.settings import settings
+
+log = get_logger(__name__)
 
 _pool: aioredis.Redis | None = None
 
@@ -29,7 +32,15 @@ def get_redis() -> aioredis.Redis:
         # Redis remoto (p.ej. Redis Cloud) puede cortar conexiones ociosas y
         # tirar el TCP a mitad de una operación. keepalive + reintentos con
         # backoff hacen que reconecte solo en vez de reventar la conversación.
-        _pool = aioredis.from_url(
+        #
+        # POOL CON TOPE Y CON COLA (BlockingConnectionPool). El plan de Redis tiene
+        # un máximo de clientes: con el pool por defecto (sin tope) una ráfaga de
+        # operaciones concurrentes —el panel pidiendo la lista de cientos de chats—
+        # abría cientos de conexiones a la vez y Redis empezaba a rechazar TODO con
+        # "max number of clients reached", incluido el bot atendiendo clientes.
+        # `Blocking...` hace que la operación 13 ESPERE una conexión libre en vez de
+        # fallar (el pool normal levanta "Too many connections" al llegar al tope).
+        pool = aioredis.BlockingConnectionPool.from_url(
             settings.redis_url,
             encoding="utf-8",
             decode_responses=True,
@@ -37,18 +48,30 @@ def get_redis() -> aioredis.Redis:
             socket_keepalive=True,
             socket_timeout=15,
             socket_connect_timeout=15,
+            max_connections=settings.redis_max_conexiones,
+            timeout=20,  # segundos esperando una conexión libre
             retry=Retry(ExponentialBackoff(base=0.2, cap=3.0), retries=3),
             retry_on_error=[RedisConnectionError, RedisTimeoutError],
         )
+        _pool = aioredis.Redis(connection_pool=pool)
+        log.info("redis_pool_creado", max_conexiones=settings.redis_max_conexiones)
     return _pool
 
 
 async def close_redis() -> None:
+    """Cierra el cliente Y SUS CONEXIONES, y descarta el pool.
+
+    `close_connection_pool=True` es obligatorio acá: como el pool se construye aparte
+    y se pasa al cliente, `auto_close_connection_pool` queda en False y un `aclose()`
+    pelado dejaría los sockets abiertos. Y esto se llama en cada blip de Redis, así
+    que serían conexiones filtradas hasta agotar el límite de clientes del plan
+    ("max number of clients reached" = Redis rechaza TODO, bot incluido).
+    """
     global _pool
     if _pool is not None:
+        cliente, _pool = _pool, None
         with contextlib.suppress(Exception):
-            await _pool.aclose()
-        _pool = None
+            await cliente.aclose(close_connection_pool=True)
 
 
 async def with_reconnect(op, attempts: int = 3):

@@ -137,3 +137,49 @@ async def test_with_reconnect_reintenta_y_recrea_pool(monkeypatch):
     assert res == "ok"
     assert llamadas["n"] == 3
     assert cerrados["n"] == 2  # recreó el pool tras cada uno de los 2 fallos
+
+
+# ------------------------------------------------------- pool acotado ---
+# Producción cayó con `ConnectionError: max number of clients reached`: el pool sin
+# tope abría una conexión por operación concurrente, y cada blip de Redis (que llama
+# a close_redis) dejaba las anteriores abiertas porque el cliente no era dueño del
+# pool. Redis rechazaba TODO, bot incluido.
+class FakeCliente:
+    def __init__(self) -> None:
+        self.cerrado_con: list = []
+
+    async def aclose(self, close_connection_pool=None):
+        self.cerrado_con.append(close_connection_pool)
+
+
+async def test_close_redis_cierra_tambien_las_conexiones(monkeypatch):
+    cliente = FakeCliente()
+    monkeypatch.setattr(rc, "_pool", cliente)
+    await rc.close_redis()
+    # Sin close_connection_pool=True los sockets quedaban abiertos (fuga).
+    assert cliente.cerrado_con == [True]
+    assert rc._pool is None
+
+
+async def test_close_redis_descarta_el_pool_aunque_falle_el_cierre(monkeypatch):
+    class Explota:
+        async def aclose(self, close_connection_pool=None):
+            raise RuntimeError("socket ya roto")
+
+    monkeypatch.setattr(rc, "_pool", Explota())
+    await rc.close_redis()
+    assert rc._pool is None  # el próximo get_redis() crea uno nuevo y sano
+
+
+def test_el_pool_tiene_tope_de_conexiones(monkeypatch):
+    """El tope debe existir y quedar por debajo del máximo de clientes del plan."""
+    from app.settings import settings
+
+    monkeypatch.setattr(rc, "_pool", None)
+    cliente = rc.get_redis()
+    pool = cliente.connection_pool
+    assert pool.max_connections == settings.redis_max_conexiones
+    assert 0 < settings.redis_max_conexiones <= 30
+    # Con cola: al llegar al tope ESPERA una conexión libre en vez de reventar.
+    assert type(pool).__name__ == "BlockingConnectionPool"
+    rc._pool = None

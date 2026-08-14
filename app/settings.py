@@ -30,6 +30,11 @@ class Settings(BaseSettings):
     redis_prefix: str = "pastoriza:"
     session_ttl_seconds: int = 86_400  # 24 h de historial de conversación
     session_max_items: int = 40  # equivalente al contextWindowLength: 20 de n8n
+    # Tope de conexiones del pool. DEBE quedar por debajo del máximo de clientes del
+    # plan de Redis (en Redis Cloud gratis son 30): al pasarse, Redis rechaza TODO
+    # con "max number of clients reached" y el bot deja de poder atender. Si el panel
+    # o el bot quedan lentos por esperar conexión, subilo (y revisá el plan).
+    redis_max_conexiones: int = 12
 
     # ---------- Debounce ----------
     debounce_seconds: float = 6.0
