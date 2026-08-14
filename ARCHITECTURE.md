@@ -146,6 +146,34 @@ re-entrena solo. Fine-tuning queda diferido a cuando haya volumen.
 escribió un humano desde YCloud → pausa 30m ese chat. Fail-safe: ante duda, no pausa.
 **Consecuencias:** el humano puede intervenir desde WhatsApp y el bot se aparta solo.
 
+### ADR-012 · Semáforo de cierre: priorizar atención humana, nunca degradar el bot
+**Contexto:** la operación pidió "filtrar los clientes que sí van a comprar de los que hacen
+perder el tiempo". El costo de los dos errores es asimétrico: atender bien a quien no compra
+cuesta centavos de tokens (el fast-path de FAQ cuesta 0); atender mal a quien sí iba a comprar
+cuesta un pedido de 300+ unidades más su recompra. Y el error no es medible: si la etiqueta
+cambia la atención, el marcado en frío compra menos y eso "confirma" la etiqueta.
+**Decisión:** `app/score.py` calcula un **semáforo de cierre** por conversación, función PURA
+sobre HECHOS que ya escriben el código y las tools (pidió las cuentas, dijo que pagó, mandó
+comprobante, cotizó, monto sobre el mínimo, eligió entrega, dio dirección/ubicación, contacto y
+pedido en Odoo). Hitos acumulativos, guardados en el chatmeta que el panel ya lee.
+Restricciones, que son la decisión y no un detalle:
+
+- **No cambia nada de cómo atiende el bot.** No se inyecta en ningún prompt: si el modelo no lo
+  ve, no puede filtrárselo a un cliente.
+- **No hay puntaje negativo ni etiqueta de "no compra".** Pedir la lista completa, preguntar por
+  millar, regatear o no dar cantidad es la apertura del MAYORISTA.
+- **Nunca mide cómo escribe el cliente** (ortografía, tildes, largo, audio vs texto, cantidad de
+  preguntas): en RD es un proxy de clase y `prompts/base_comun.md` ya ordena lo contrario.
+- **Gris = sin señales todavía**, distinto de "malo"; y `sem` vacío = sin datos.
+- **Fail-open:** si algo falla, nadie queda marcado en frío (`score=None`).
+- **Nunca en Odoo:** una probabilidad de compra en `res.partner` sería perfilado permanente,
+  exportable y visible para todo el personal.
+
+**Consecuencias:** el panel ordena a quién llamar primero (botón «↕ por cierre», con
+«esperando respuesta» arriba) y muestra el semáforo SIEMPRE con su desglose en texto, para que
+sea discutible. Costo: 0 tokens y 0 llamadas nuevas; en Redis queda en neto NEGATIVO, porque al
+pasar `emisor` explícito a `publicar()` se ahorran más lecturas de las que agrega.
+
 ### ADR-011 · Dos canales (números de YCloud) con configuración independiente
 **Contexto:** el negocio atiende con DOS números — uno de ellos COEXISTENTE con la app de
 WhatsApp Business— y cada uno es una operación aparte: sus conversaciones, sus precios, sus
@@ -195,7 +223,7 @@ Claude"), alertas por tipo, notificación opcional a Telegram, y `/health`, `/he
 
 ## 8. Calidad
 
-**266 tests** de lógica pura y determinista (enrutado, matching, cotización, saneo de salida,
+**317 tests** de lógica pura y determinista (enrutado, matching, cotización, saneo de salida,
 entrega, repetición, prompts, separación por canal), corren sin secretos ni red
 (`tests/conftest.py` fija dummies; el panel se prueba con TestClient + `tests/fake_redis.py`).
 Lo no-determinista (el modelo) queda acotado por las reglas duras.

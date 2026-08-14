@@ -13,7 +13,7 @@ Entorno **Windows**; hay `Makefile` pero en Windows conviene invocar el venv dir
 
 ```bash
 # venv (Python 3.12)
-./.venv/Scripts/python.exe -m pytest -q                          # toda la suite (266 tests)
+./.venv/Scripts/python.exe -m pytest -q                          # toda la suite (317 tests)
 ./.venv/Scripts/python.exe -m pytest tests/test_enrutador.py -q  # un archivo
 ./.venv/Scripts/python.exe -m pytest tests/test_seguridad.py::TestNoInventarFotos -q  # una clase/test
 
@@ -69,6 +69,16 @@ personalizados (`agentes_custom`); todas esas funciones toman `canal=` y las de 
 que un mismo Agent sirve a los dos. Si agregás algo configurable, seguí ese patrón o el panel
 mentirá. `YCLOUD_FROM` **debe quedar vacía** con dos números (si no, todo sale por uno solo; se
 avisa al arrancar). Sigue compartido por chat_id: sesión/historial, pausa 30 min y debounce.
+
+**Semáforo de cierre (`app/score.py`, ADR-012):** función PURA que puntúa qué tan cerca está una
+conversación de convertirse en pedido, con HECHOS que ya escriben las tools (pidió las cuentas,
+comprobante, cotizó, pedido…). Sirve para **ordenar a quién atiende primero una persona** y nada
+más: NO se inyecta en ningún prompt, NO cambia una sola respuesta del bot, NO tiene puntaje
+negativo y NUNCA mide cómo escribe el cliente (ortografía/audio/largo = proxy de clase, y
+`base_comun.md` lo prohíbe). Gris = sin señales todavía ≠ malo. Se calcula en `_puntuar`
+(pipeline) y viaja en el chatmeta; el panel lo muestra siempre con su desglose en texto. Si
+agregás hitos, agregalos a `PESOS` y NO agregues nada que castigue al mayorista (pedir la lista,
+regatear, preguntar mucho).
 
 **Panel de operación** (`app/panel/`, servido en `/panel`, protegido con `PANEL_TOKEN`): CRM en
 vivo, alertas, config, prompts por-agente, aprendizaje, kill-switch global. La UI es una SPA

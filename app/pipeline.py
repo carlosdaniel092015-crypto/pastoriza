@@ -38,6 +38,7 @@ from app.redis_client import conversation_lock
 from app.repeticion import contar_repeticion
 from app.repeticion import reset as reset_repeticion
 from app.router import respuesta_directa
+from app import score
 from app.session import RedisSession
 from app.settings import settings
 from app.ycloud import ycloud
@@ -135,7 +136,10 @@ async def _registrar_entrante(msg: InboundMessage) -> None:
             ultimo_de="cliente",
         )
         await panel_events.publicar(
-            "entrante", msg.chat_id, user_name=msg.user_name or "", texto=texto[:200]
+            "entrante", msg.chat_id, user_name=msg.user_name or "", texto=texto[:200],
+            # `emisor` explícito: si no, publicar() lo busca en el chatmeta (1 lectura
+            # extra a Redis por evento, y son varios eventos por turno).
+            emisor=settings.ycloud_from or msg.instance_from,
         )
     except Exception as exc:  # noqa: BLE001
         # Que el panel no reciba el aviso NO puede impedir atender al cliente.
@@ -425,7 +429,7 @@ async def procesar_turno(
         await reset_repeticion(chat_id)
         await encolar_revision(chat_id, ["repeticion_3x"], texto[:200], None, ctx.user_name)
         await panel_events.publicar(
-            "handoff", chat_id, user_name=ctx.user_name,
+            "handoff", chat_id, user_name=ctx.user_name, emisor=emisor,
             donde="Repetición (cliente preguntó lo mismo 3+ veces)",
             texto=texto[:200], motivos=["repeticion_3x"],
         )
@@ -446,6 +450,9 @@ async def procesar_turno(
                 {"role": "assistant", "content": directa},
             ]
         )
+        # El fast-path también mueve el semáforo: quien pregunta por las cuentas de
+        # banco lo hace muchas veces por acá (0 tokens), y es la señal más fuerte.
+        puntos = await _puntuar(chat_id, texto, ctx)
         await panel_events.tocar_chatmeta(
             chat_id, emisor=emisor, destino=destino,
             user_name=ctx.user_name, telefono=ctx.telefono or "",
@@ -454,10 +461,12 @@ async def procesar_turno(
             ultimo=directa, ultimo_de="bot",
             ad_id=ctx.ad_id, ad_headline=ctx.ad_headline,
             ad_producto=ctx.ad_producto_nombre or ctx.ad_descripcion.replace("\n", " ")[:140],
+            score=puntos["score"], score_sem=puntos["sem"], score_hitos=puntos["hitos"],
         )
         await panel_events.publicar(
-            "turn", chat_id, user_name=ctx.user_name, texto=texto,
+            "turn", chat_id, user_name=ctx.user_name, texto=texto, emisor=emisor,
             respuesta=directa, fast_path=True, agente="fast-path",
+            score=puntos["score"], score_sem=puntos["sem"],
         )
         return
 
@@ -483,18 +492,60 @@ async def procesar_turno(
     await tocar_ventana_24h(chat_id)
     await _efectos(ctx, respuesta, mensaje, trigger)
 
+    # Semáforo de cierre: acá el turno está CERRADO y los efectos son definitivos
+    # (order_id, líneas y la cotización los acaba de fijar _efectos/las tools). Es
+    # cálculo puro y viaja en el hset que ya se hace: 0 tokens, 0 Redis extra.
+    puntos = await _puntuar(chat_id, texto, ctx)
+
     # Si el bot no llegó a decir nada (p. ej. sólo mandó fotos), queda lo del cliente.
     ultimo_txt = mensaje or (f"({len(fotos)} foto(s))" if fotos else texto)
     await panel_events.tocar_chatmeta(
         chat_id, emisor=emisor, destino=destino,
         user_name=ctx.user_name, telefono=ctx.telefono or "",
         ultimo=ultimo_txt, ultimo_de="bot" if (mensaje or fotos) else "cliente",
+        score=puntos["score"], score_sem=puntos["sem"], score_hitos=puntos["hitos"],
     )
     await panel_events.publicar(
-        "turn", chat_id, user_name=ctx.user_name, texto=texto,
+        "turn", chat_id, user_name=ctx.user_name, texto=texto, emisor=emisor,
         respuesta=mensaje, order_id=ctx.order_id, agente=ctx.agente,
         escalar=bool(ctx.escalar or respuesta.escalar),
+        score=puntos["score"], score_sem=puntos["sem"],
     )
+
+
+async def _puntuar(chat_id: str, texto: str, ctx: ConversationContext) -> dict:
+    """Semáforo de cierre de la conversación (app/score.py). Nunca tumba el turno.
+
+    Los hitos son acumulativos, así que hay que leer los previos: se toman del mismo
+    chatmeta que el panel ya usa (1 lectura, la misma que `tocar_chatmeta` hace justo
+    después). Es sólo para ORDENAR la atención del equipo: no se le pasa al modelo ni
+    cambia una sola respuesta del bot.
+    """
+    try:
+        previos = (await panel_events.leer_chatmeta(chat_id)).get("score_hitos") or []
+        nuevos = score.detectar(
+            texto,
+            es_comprobante=ctx.es_comprobante,
+            order_id=ctx.order_id,
+            partner_id=ctx.partner_id,
+            lineas_creadas=ctx.lineas_creadas,
+            cotizado_unidades=ctx.cotizado_unidades,
+            cotizado_total=ctx.cotizado_total,
+            cotizado_modalidad=ctx.cotizado_modalidad,
+            monto_minimo=_monto_minimo(ctx.cfg),
+        )
+        return score.puntuar(previos, nuevos)
+    except Exception as exc:  # noqa: BLE001
+        # Fail-open y explícito: si esto falla, NADIE queda marcado en frío.
+        log.warning("score_fallo", chat_id=chat_id, error=str(exc))
+        return {"score": None, "sem": "", "hitos": []}
+
+
+def _monto_minimo(cfg) -> float:
+    try:
+        return float(str(cfg.monto_minimo).replace(",", ""))
+    except (TypeError, ValueError):
+        return 0.0
 
 
 async def _correr_agente(
@@ -606,7 +657,7 @@ async def _efectos(
     # 1. Pedido creado -> avisar al admin y adjuntar el comprobante en Odoo.
     if ctx.order_id:
         await panel_events.publicar(
-            "order", ctx.chat_id, user_name=ctx.user_name,
+            "order", ctx.chat_id, user_name=ctx.user_name, emisor=ctx.emisor,
             detalle=f"Pedido {ctx.order_id} creado", order_id=ctx.order_id,
         )
         await ycloud.enviar_plantilla(
@@ -671,7 +722,7 @@ async def _efectos(
     )
     if ctx.motivo_revision:
         await panel_events.publicar(
-            "revision", ctx.chat_id, user_name=ctx.user_name,
+            "revision", ctx.chat_id, user_name=ctx.user_name, emisor=ctx.emisor,
             motivos=ctx.motivo_revision,
             texto=(trigger.content or "")[:200],
             resumen=mensaje[:200],

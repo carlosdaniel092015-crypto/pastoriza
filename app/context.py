@@ -51,6 +51,12 @@ class ConversationContext:
     productos_ofrecidos: dict[int, Producto] = field(default_factory=dict)
     escalar: bool = False
     motivo_revision: list[str] = field(default_factory=list)
+    # Lo que se le cotizó (lo escribe la tool `cotizar`, nunca el modelo). Alimenta el
+    # semáforo de cierre del panel (app/score.py): una cotización por encima del
+    # pedido mínimo es la señal de compra más honesta que hay.
+    cotizado_unidades: int = 0
+    cotizado_total: float = 0.0
+    cotizado_modalidad: str = ""
 
     def marcar_revision(self, motivo: str) -> None:
         if motivo not in self.motivo_revision:

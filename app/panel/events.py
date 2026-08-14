@@ -119,12 +119,18 @@ async def tocar_chatmeta(
     ad_id: str = "",
     ad_headline: str = "",
     ad_producto: str = "",
+    score: int | None = None,
+    score_sem: str = "",
+    score_hitos: list[str] | None = None,
 ) -> None:
     # La info del anuncio se setea en el primer mensaje (referral); en los turnos
     # siguientes no llega, así que la preservamos leyendo la meta previa. Lo mismo
     # con nombre/teléfono/emisor: un mensaje sin perfil no debe BORRAR lo que ya
     # sabíamos del cliente (pasa al registrar el entrante apenas llega).
-    if not (ad_id and user_name and telefono and emisor):
+    # OJO: este dict se rearma DE CERO más abajo, así que todo lo que no se preserve
+    # acá se pierde. El semáforo de cierre entra en la misma cuenta: quien escriba sin
+    # pasarlo (p. ej. responder desde el panel) no debe borrar los hitos del cliente.
+    if not (ad_id and user_name and telefono and emisor and score is not None):
         prev = await leer_chatmeta(chat_id)
         ad_id = ad_id or prev.get("ad_id", "") or ""
         ad_headline = ad_headline or prev.get("ad_headline", "") or ""
@@ -133,6 +139,11 @@ async def tocar_chatmeta(
         telefono = telefono or prev.get("telefono", "") or ""
         emisor = emisor or prev.get("emisor", "") or ""
         destino = destino or prev.get("destino") or None
+        if score is None:
+            score = prev.get("score")
+            score_sem = score_sem or prev.get("score_sem", "") or ""
+            if score_hitos is None:
+                score_hitos = prev.get("score_hitos") or None
 
     meta = {
         "chat_id": chat_id,
@@ -147,8 +158,14 @@ async def tocar_chatmeta(
         "ultimo_de": ultimo_de or "cliente",
         "ultimo_ts": time.time(),
         "ad_id": ad_id,
-        "ad_headline": ad_headline,
         "ad_producto": ad_producto,
+        "ad_headline": ad_headline,
+        # Semáforo de cierre (app/score.py). Se guarda el valor ABSOLUTO recalculado,
+        # nunca un incremento: esta escritura usa `with_reconnect`, que reintenta, y un
+        # delta se contaría dos veces.
+        "score": score,
+        "score_sem": score_sem,
+        "score_hitos": list(score_hitos or []),
     }
 
     async def _op(r: Any) -> None:

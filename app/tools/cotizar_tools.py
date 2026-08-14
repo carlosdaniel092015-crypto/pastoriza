@@ -106,6 +106,15 @@ async def cotizar(
     if c.cantidad > 5000:
         ctx.context.marcar_revision("cantidad_muy_alta")
 
+    # Queda registrado como EFECTO de la tool (no lo declara el modelo): es lo que
+    # alimenta el semáforo de cierre del panel. Se guarda la cotización más grande del
+    # turno, que es la que mejor representa la intención.
+    if c.total_final >= ctx.context.cotizado_total:
+        ctx.context.cotizado_unidades = c.cantidad
+        ctx.context.cotizado_total = c.total_final
+    if c.modalidad:
+        ctx.context.cotizado_modalidad = c.modalidad
+
     lineas = [
         "COTIZACION (para mostrar al cliente):",
         f"Cantidad: {c.cantidad}",

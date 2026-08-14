@@ -175,6 +175,48 @@ class TestSinCanal:
         assert cliente.post("/panel/api/chats/asignar-canal").status_code == 400
 
 
+class TestSemaforoEnLaLista:
+    """El semáforo de cierre viaja en la lista, con su motivo y sin costo extra."""
+
+    def _chat(self, cliente, chat, **extra):
+        import json as _json
+
+        from app.panel import events
+
+        import app.redis_client as rc
+        rc._pool.hashes.setdefault(events.CHATMETA_KEY, {})[chat] = _json.dumps(
+            {"chat_id": chat, "emisor": A, "ultimo": "hola", "ultimo_de": "cliente",
+             "ultimo_ts": 1000, **extra}
+        )
+
+    def test_llega_con_el_motivo_en_texto(self, cliente):
+        self._chat(cliente, "18091110001", score=45, score_sem="verde",
+                   score_hitos=["pidio_cuentas", "cotizo"])
+        fila = _get(cliente, "/panel/api/chats")["chats"][0]
+        assert fila["score"] == 45 and fila["sem"] == "verde"
+        # Traducido para el operador, no el nombre interno del hito.
+        assert fila["hitos"] == ["Pidió las cuentas", "Cotizó"]
+
+    def test_un_chat_sin_semaforo_no_se_marca_como_frio(self, cliente):
+        self._chat(cliente, "18091110002")
+        fila = _get(cliente, "/panel/api/chats")["chats"][0]
+        assert fila["score"] is None and fila["sem"] == "" and fila["hitos"] == []
+
+    def test_cuenta_los_que_estan_por_cerrar_por_canal(self, cliente):
+        self._chat(cliente, "18091110003", score=60, score_sem="verde")
+        self._chat(cliente, "18091110004", score=15, score_sem="amarillo")
+        self._chat(cliente, "18091110005", score=100, score_sem="cerrado")
+        por_canal = {c["canal"]: c for c in _get(cliente, "/panel/api/chats")["canales"]}
+        assert por_canal[CA]["por_cerrar"] == 1
+        assert por_canal[CA]["total"] == 3
+        assert por_canal[CB]["por_cerrar"] == 0
+
+    def test_hitos_viejos_o_desconocidos_no_rompen_la_lista(self, cliente):
+        self._chat(cliente, "18091110006", score=10, score_sem="amarillo",
+                   score_hitos=["hito_que_ya_no_existe"])
+        assert _get(cliente, "/panel/api/chats")["chats"][0]["hitos"] == []
+
+
 class TestRendimientoYFallas:
     """La lista de chats es lo que más se refresca: no puede costar una ida a Redis
     por conversación, ni mentir cuando Redis no responde."""
