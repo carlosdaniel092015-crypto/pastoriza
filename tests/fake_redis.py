@@ -7,6 +7,7 @@ tocar nada más.
 """
 from __future__ import annotations
 
+import asyncio
 from typing import Any
 
 
@@ -20,18 +21,31 @@ class FakeRedis:
         # lectura por conversación en cada refresco.
         self.contar = False
         self.ops: list[str] = []
+        # Concurrencia observada: cuántas operaciones hay EN VUELO a la vez. Sirve
+        # para probar que el panel no dispara una conexión por conversación (eso
+        # tumbó Redis con "max number of clients reached").
+        self.en_vuelo = 0
+        self.max_en_vuelo = 0
 
     def _reg(self, nombre: str) -> None:
         if self.contar:
             self.ops.append(nombre)
 
+    async def _tocar(self, nombre: str) -> None:
+        """Registra la operación y cede el control, para que se vea el paralelismo."""
+        self._reg(nombre)
+        self.en_vuelo += 1
+        self.max_en_vuelo = max(self.max_en_vuelo, self.en_vuelo)
+        await asyncio.sleep(0)
+        self.en_vuelo -= 1
+
     # --- strings ---
     async def get(self, key: str) -> str | None:
-        self._reg("get")
+        await self._tocar("get")
         return self.kv.get(key)
 
     async def mget(self, keys: list[str]) -> list[str | None]:
-        self._reg("mget")
+        await self._tocar("mget")
         return [self.kv.get(k) for k in keys]
 
     async def set(self, key: str, val: Any, nx: bool = False, ex: int | None = None):
@@ -70,6 +84,7 @@ class FakeRedis:
         return self.hashes.get(key, {}).get(campo)
 
     async def hgetall(self, key: str) -> dict[str, str]:
+        await self._tocar("hgetall")
         return dict(self.hashes.get(key, {}))
 
     async def hdel(self, key: str, *campos: str) -> int:
@@ -88,6 +103,7 @@ class FakeRedis:
         return len(self.listas[key])
 
     async def lrange(self, key: str, start: int, stop: int) -> list[str]:
+        await self._tocar("lrange")
         items = self.listas.get(key, [])
         return items[start:] if stop == -1 else items[start : stop + 1]
 

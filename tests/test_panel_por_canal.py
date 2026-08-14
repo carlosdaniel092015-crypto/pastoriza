@@ -136,6 +136,34 @@ class TestRendimientoYFallas:
         assert fake.ops.count("mget") == 1
         assert fake.ops.count("get") == 0
 
+    def test_no_dispara_una_conexion_por_conversacion(self, cliente):
+        """Regresión de producción: `ConnectionError: max number of clients reached`.
+
+        Paralelizar la lista sin tope pedía una conexión por chat (cientos a la vez);
+        Redis empezaba a rechazar TODO, incluido el bot atendiendo clientes.
+        """
+        import json as _json
+
+        from app.panel import events, router as pr
+        from app.settings import settings
+
+        import app.redis_client as rc
+        fake = rc._pool
+        for i in range(200):
+            chat = f"1809777{i:04d}"
+            fake.hashes.setdefault(events.CHATMETA_KEY, {})[chat] = _json.dumps(
+                {"chat_id": chat, "emisor": A, "ultimo": "hola", "ultimo_ts": 1000 + i}
+            )  # sin `ultimo_de`: obliga a leer el historial de cada uno
+            fake.listas[settings.key("session", chat)] = [
+                _json.dumps({"role": "user", "content": "hola"})
+            ]
+        fake.max_en_vuelo = 0
+        d = _get(cliente, "/panel/api/chats")
+        assert d["total"] == 200
+        assert 0 < fake.max_en_vuelo <= pr._CONCURRENCIA, (
+            f"{fake.max_en_vuelo} lecturas a la vez: tiene que estar acotado"
+        )
+
     def test_si_redis_falla_lo_dice_en_vez_de_mostrar_cero(self, cliente, monkeypatch):
         """Regresión: "no hay conversaciones" y "Redis caído" se veían IGUAL."""
         from app.panel import events
