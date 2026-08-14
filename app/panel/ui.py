@@ -705,7 +705,7 @@ const COLS=[
   {k:'gris',     t:'Sin señales aún',  e:'Todavía no hizo nada medible. NO significa que no vaya a comprar: muchos preguntan hoy y compran semanas después.'},
   {k:'amarillo', t:'Interesado',       e:'Avanzó algo (cotizó, eligió envío o retiro) pero todavía no llegó al momento de pagar.'},
   {k:'verde',    t:'Cerca de cerrar',  e:'Pidió las cuentas, cotizó sobre el mínimo, dio dirección o ya dice que pagó. Estos son los que conviene llamar primero.'},
-  {k:'cerrado',  t:'Pedido creado',    e:'El pedido ya existe en Odoo. Si dice «falta el comprobante» es que todavía no hay prueba de pago: normal en retiro en tienda (paga en el mostrador), pero en envío hay que esperar la transferencia antes de despachar.'},
+  {k:'cerrado',  t:'Pedido creado',    e:'El pedido ya existe en Odoo. En retiro en tienda el cliente paga en el mostrador y no se le pide comprobante. Sólo en ENVÍO se avisa «falta el comprobante»: ahí hay que esperar la transferencia antes de despachar.'},
 ];
 function grupoSem(c){ return c.sem || 'gris'; }   // sin datos se muestra con los grises
 function renderSemaforo(){

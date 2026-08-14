@@ -48,6 +48,14 @@ PESOS: dict[str, tuple[int, str]] = {
     "contacto": (10, "Registrado en Odoo"),
 }
 
+# Marcadores que INFORMAN pero no puntúan. No van en PESOS a propósito: retirar en
+# tienda no es "mejor" ni "peor" que un envío, pero cambia lo que hay que hacer
+# (en envío se espera la transferencia; en retiro se paga en el mostrador).
+INFO: dict[str, str] = {
+    "entrega_envio": "Envío a domicilio",
+    "entrega_retiro": "Retiro en tienda",
+}
+
 UMBRAL_VERDE = 40
 UMBRAL_AMARILLO = 15
 
@@ -66,6 +74,7 @@ def detectar(
     cotizado_unidades: int = 0,
     cotizado_total: float = 0.0,
     cotizado_modalidad: str = "",
+    pedido_modalidad: str = "",
     monto_minimo: float = 0.0,
 ) -> set[str]:
     """Hitos alcanzados EN ESTE TURNO. Todo dato viene de una tool o del código."""
@@ -96,8 +105,12 @@ def detectar(
         hitos.add("cotizo")
         if monto_minimo > 0 and cotizado_total >= monto_minimo:
             hitos.add("sobre_minimo")
-    if cotizado_modalidad in ("envio", "retiro"):
+    # La del PEDIDO manda sobre la de la cotización (se puede cotizar envío y terminar
+    # retirando en tienda).
+    modalidad = pedido_modalidad or cotizado_modalidad
+    if modalidad in ("envio", "retiro"):
         hitos.add("eligio_entrega")
+        hitos.add("entrega_envio" if modalidad == "envio" else "entrega_retiro")
     return hitos
 
 
@@ -152,6 +165,17 @@ def desde_historial(items: list[dict] | None) -> tuple[set[str], float]:
                 hitos.add("comprobante")
             continue
 
+        # 1b. La modalidad con la que se creó el pedido está en los ARGUMENTOS de
+        # crear_pedido. No es texto redactado para el cliente: es el dato con el que la
+        # tool actuó (y con el que escribió la nota de entrega en Odoo).
+        if tipo == "function_call" and str(item.get("name") or "") == "crear_pedido":
+            args = str(item.get("arguments") or "").lower()
+            if '"modalidad"' in args:
+                if "retiro" in args or '"ret' in args:
+                    hitos |= {"eligio_entrega", "entrega_retiro"}
+                elif "envio" in args or "envío" in args:
+                    hitos |= {"eligio_entrega", "entrega_envio"}
+
         # 2. Salidas de TOOLS. Sólo estas: lo que redactó el modelo no cuenta.
         if tipo.startswith("function_call") or rol == "tool":
             for hito, marcas in _MARCAS_TOOL.items():
@@ -167,8 +191,11 @@ def desde_historial(items: list[dict] | None) -> tuple[set[str], float]:
                             )
                         except (IndexError, ValueError):
                             pass
-                if "Retiro en tienda" in texto or "Envio: RD$" in texto:
-                    hitos.add("eligio_entrega")
+                # La cotización dice la modalidad en texto: es salida de tool.
+                if "Retiro en tienda" in texto:
+                    hitos |= {"eligio_entrega", "entrega_retiro"}
+                elif "Envio: RD$" in texto:
+                    hitos |= {"eligio_entrega", "entrega_envio"}
     return hitos, total_cotizado
 
 
@@ -185,12 +212,12 @@ def puntuar(previos: list[str] | None, nuevos: set[str] | None = None) -> dict:
 
     `previos`: hitos que ya venían de turnos anteriores (se conservan).
     """
-    validos = set(PESOS)
+    validos = set(PESOS) | set(INFO)
     hitos = sorted(
         (set(previos or []) | set(nuevos or [])) & validos,
-        key=lambda h: (-PESOS[h][0], h),
+        key=lambda h: (-PESOS.get(h, (0, ""))[0], h),
     )
-    score = min(100, sum(PESOS[h][0] for h in hitos))
+    score = min(100, sum(PESOS[h][0] for h in hitos if h in PESOS))
 
     # Si el pedido EXISTE en Odoo, la conversación ya no es una venta por cerrar: es un
     # pedido. Y punto. Antes se exigía también prueba de pago, y eso dejaba fuera al
@@ -209,23 +236,32 @@ def puntuar(previos: list[str] | None, nuevos: set[str] | None = None) -> dict:
 
 
 def falta_pago(hitos: list[str] | None) -> bool:
-    """Pedido creado del que todavía NO hay prueba de pago.
+    """Pedido de ENVÍO del que todavía no hay prueba de pago: hay que esperarla.
 
-    No baja el semáforo (el pedido existe), pero hay que poder verlo: en un envío el
-    despacho espera la transferencia. En un retiro en tienda se paga en el mostrador,
-    así que suele ser normal — por eso se muestra como aviso y no como problema.
+    Sólo aplica al envío. En el retiro en tienda el cliente paga en el mostrador y NO
+    se le pide comprobante, así que avisar ahí sería ruido en cada pedido de retiro.
+    No baja el semáforo: el pedido existe igual.
     """
     h = set(hitos or [])
-    return "pedido" in h and not ({"comprobante", "dijo_pago"} & h)
+    return (
+        "pedido" in h
+        and "entrega_envio" in h
+        and not ({"comprobante", "dijo_pago"} & h)
+    )
 
 
 def etiquetas(hitos: list[str] | None) -> list[str]:
     """Los hitos en texto, para mostrar el POR QUÉ del semáforo (nunca sólo el número:
     un número sin explicación se convierte en un juicio que nadie puede discutir)."""
-    return [PESOS[h][1] for h in (hitos or []) if h in PESOS]
+    return [
+        (PESOS[h][1] if h in PESOS else INFO[h])
+        for h in (hitos or [])
+        if h in PESOS or h in INFO
+    ]
 
 
 __all__ = [
+    "INFO",
     "PESOS",
     "falta_pago",
     "desde_historial",

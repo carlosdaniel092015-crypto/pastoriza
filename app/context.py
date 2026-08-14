@@ -57,6 +57,9 @@ class ConversationContext:
     cotizado_unidades: int = 0
     cotizado_total: float = 0.0
     cotizado_modalidad: str = ""
+    # Modalidad con la que se CREÓ el pedido ("envio" | "retiro"). Manda sobre la de la
+    # cotización: el cliente puede cotizar envío y terminar retirando en tienda.
+    pedido_modalidad: str = ""
 
     def marcar_revision(self, motivo: str) -> None:
         if motivo not in self.motivo_revision:
