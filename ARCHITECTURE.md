@@ -84,6 +84,9 @@ bloques condicionales. Cada `.md` es editable/subible desde el panel (override e
 
 `config` y `ads_map` usan keys literales (compartidas con n8n durante la migración).
 
+Lo configurable existe en dos niveles: la key COMÚN y `…:c:<canal>` por número
+(ver ADR-011). El sufijo lo arma `app/canales.py`.
+
 ---
 
 ## 5. Decisiones de arquitectura (ADR)
@@ -143,6 +146,31 @@ re-entrena solo. Fine-tuning queda diferido a cuando haya volumen.
 escribió un humano desde YCloud → pausa 30m ese chat. Fail-safe: ante duda, no pausa.
 **Consecuencias:** el humano puede intervenir desde WhatsApp y el bot se aparta solo.
 
+### ADR-011 · Dos canales (números de YCloud) con configuración independiente
+**Contexto:** el negocio atiende con DOS números — uno de ellos COEXISTENTE con la app de
+WhatsApp Business— y cada uno es una operación aparte: sus conversaciones, sus precios, sus
+prompts, sus reglas aprendidas y sus agentes. Un solo despliegue debe servir a los dos.
+**Decisión:** el **canal** es el número NUESTRO por el que entró el mensaje
+(`emisor` = `msg.instance_from`, normalizado a sus últimos 10 dígitos por `app/canales.py`).
+Cada dato configurable vive en dos niveles:
+
+```
+pastoriza:algo              -> COMÚN (la base que heredan los dos números)
+pastoriza:algo:c:8092221092 -> PROPIO de ese canal (gana sobre el común)
+```
+
+Aplica a `config` (business_config), `panel:prompt:{agente}` (prompt_store),
+`panel:reglas` / `panel:correcciones` (conocimiento) y `panel:agentes_custom`.
+El canal viaja en `ConversationContext.emisor`, así que `armar_instrucciones` resuelve prompt +
+conocimiento por canal en cada turno y **un mismo Agent sirve a los dos números**.
+Guardar desde el panel toca sólo el canal abierto; `ambos=True` escribe el común y borra los
+propios (es la única forma de afectar al otro número).
+**Consecuencias:** cambiar de pestaña en el panel cambia TODO (conversaciones, config, prompts,
+aprendizaje, logs y cola de revisión). `YCLOUD_FROM` debe quedar VACÍA con dos canales (si no,
+todo saldría por un solo número): se avisa al arrancar por log y Telegram. Lo que sigue
+compartido por chat_id —y no por canal— es la sesión/historial, la pausa de 30 min y el
+debounce: si el MISMO cliente escribe a los dos números, comparten hilo.
+
 ### ADR-010 · Un worker por ahora (límite consciente)
 **Contexto:** caches en memoria por-proceso (prompts, conocimiento, config, catálogo).
 **Decisión:** correr en 1 worker hasta la fase de escalado.
@@ -167,8 +195,9 @@ Claude"), alertas por tipo, notificación opcional a Telegram, y `/health`, `/he
 
 ## 8. Calidad
 
-**149 tests** de lógica pura y determinista (enrutado, matching, cotización, saneo de salida,
-entrega, repetición, prompts), corren sin secretos ni red (`tests/conftest.py` fija dummies).
+**266 tests** de lógica pura y determinista (enrutado, matching, cotización, saneo de salida,
+entrega, repetición, prompts, separación por canal), corren sin secretos ni red
+(`tests/conftest.py` fija dummies; el panel se prueba con TestClient + `tests/fake_redis.py`).
 Lo no-determinista (el modelo) queda acotado por las reglas duras.
 
 ## 9. Escalabilidad y pendientes

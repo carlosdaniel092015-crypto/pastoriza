@@ -16,20 +16,23 @@ from app.panel import agentes_custom, prompt_store
 @pytest.fixture(autouse=True)
 def _registro_limpio():
     """Aísla el cache del registro (no toca Redis)."""
-    previo = dict(agentes_custom._cache)
+    previo = {k: dict(v) for k, v in agentes_custom._cache.items()}
     yield
-    agentes_custom._cache = previo
+    agentes_custom._cache.clear()
+    agentes_custom._cache.update(previo)
 
 
 def _registrar(nombre="mayorista", palabras=("al por mayor", "mayorista"),
-               herramientas=("catalogo", "cotizar"), modelo="mini"):
-    agentes_custom._cache[nombre] = {
+               herramientas=("catalogo", "cotizar"), modelo="mini", canal=""):
+    """Registra un agente en el cache. `canal` vacío = común a los dos números."""
+    agentes_custom._cache.setdefault(canal, {})[nombre] = {
         "nombre": nombre,
         "descripcion": "Atiende compras al por mayor",
         "herramientas": list(herramientas),
         "palabras": list(palabras),
         "modelo": modelo,
         "activo": True,
+        "canal": canal,
     }
     agentes_custom._version += 1
 
@@ -78,7 +81,7 @@ class TestEnrutado:
 
     def test_agente_inactivo_no_enruta(self):
         _registrar()
-        agentes_custom._cache["mayorista"]["activo"] = False
+        agentes_custom._cache[""]["mayorista"]["activo"] = False
         assert ruta_personalizada("compro al por mayor") is None
 
 
@@ -115,3 +118,57 @@ class TestPromptStore:
         # Los base siguen presentes.
         for n in prompt_store.AGENTES:
             assert n in prompt_store.agentes()
+
+    def test_un_agente_de_un_solo_canal_tambien_es_editable(self):
+        _registrar(nombre="mayorista", canal=CANAL_A)
+        assert "mayorista" in prompt_store.agentes()
+
+
+# ------------------------------------------------------------ por canal ---
+CANAL_A = "8099221092"
+CANAL_B = "8294716701"
+
+
+class TestPorCanal:
+    """Un agente creado para un número NO atiende en el otro."""
+
+    def test_solo_atiende_en_su_canal(self):
+        _registrar(nombre="mayorista", canal=CANAL_A)
+        assert agentes_custom.get("mayorista", CANAL_A) is not None
+        assert agentes_custom.get("mayorista", CANAL_B) is None
+        assert agentes_custom.nombres(CANAL_A) == ("mayorista",)
+        assert agentes_custom.nombres(CANAL_B) == ()
+
+    def test_no_enruta_en_el_otro_canal(self):
+        _registrar(nombre="mayorista", palabras=("al por mayor",), canal=CANAL_A)
+        assert ruta_personalizada("compro al por mayor", CANAL_A) == "mayorista"
+        assert ruta_personalizada("compro al por mayor", CANAL_B) is None
+        # En el otro número ese agente no captura: sigue el enrutado normal.
+        assert ruta_deterministica("compro al por mayor", canal=CANAL_B) != "mayorista"
+        assert ruta_deterministica("precio de botella 8 oz", canal=CANAL_B) == "ventas"
+
+    def test_un_agente_comun_atiende_en_los_dos(self):
+        _registrar(nombre="mayorista", palabras=("al por mayor",), canal="")
+        assert ruta_personalizada("compro al por mayor", CANAL_A) == "mayorista"
+        assert ruta_personalizada("compro al por mayor", CANAL_B) == "mayorista"
+
+    def test_el_del_canal_gana_al_comun(self):
+        _registrar(nombre="mayorista", herramientas=("catalogo",), canal="")
+        _registrar(nombre="mayorista", herramientas=("catalogo", "pedido"), canal=CANAL_A)
+        assert agentes_custom.get("mayorista", CANAL_A)["herramientas"] == [
+            "catalogo", "pedido"
+        ]
+        assert agentes_custom.get("mayorista", CANAL_B)["herramientas"] == ["catalogo"]
+        # Y no se duplica en el listado del canal.
+        nombres_a = [a["nombre"] for a in agentes_custom.listar(CANAL_A)]
+        assert nombres_a == ["mayorista"]
+
+    def test_el_especialista_se_construye_por_canal(self):
+        _registrar(nombre="mayorista", herramientas=("catalogo",), canal=CANAL_A)
+        agente_a = especialistas.obtener("mayorista", CANAL_A)
+        nombres = {getattr(t, "name", "") for t in agente_a.tools}
+        assert "buscar_producto" in nombres
+        # En el otro número ese agente no existe: cae a ventas, no explota.
+        assert especialistas.obtener("mayorista", CANAL_B) is (
+            especialistas.ESPECIALISTAS["ventas"]
+        )

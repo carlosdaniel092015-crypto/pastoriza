@@ -129,8 +129,12 @@ def armar_instrucciones(nombre: str):
         from app.panel.conocimiento import get_bloque_inyeccion
         from app.panel.prompt_store import get_prompt
 
-        partes = [get_prompt("base_comun"), get_prompt(nombre)]
-        conocimiento = get_bloque_inyeccion()
+        # CANAL: el número nuestro por el que entró la conversación. Prompts y
+        # conocimiento se resuelven POR CANAL (propio del canal -> común -> .md),
+        # así el mismo Agent atiende los dos números con la instrucción de cada uno.
+        canal = getattr(ctx.context, "emisor", "") or ""
+        partes = [get_prompt("base_comun", canal), get_prompt(nombre, canal)]
+        conocimiento = get_bloque_inyeccion(canal)
         if conocimiento:
             partes.append(conocimiento)
         partes.append(_bloque_dinamico(ctx.context))

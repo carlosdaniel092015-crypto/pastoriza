@@ -10,6 +10,7 @@ from __future__ import annotations
 from agents import Agent
 
 from app.agents.base import crear_especialista
+from app.canales import COMUN, canal_id
 from app.context import ConversationContext
 from app.logging_conf import get_logger
 from app.panel import agentes_custom
@@ -27,8 +28,9 @@ PACK_TOOLS = {
     "pedidos_cliente": [buscar_pedidos_cliente],
 }
 
-# nombre -> (version_del_registro, Agent)
-_construidos: dict[str, tuple[int, Agent]] = {}
+# (canal, nombre) -> (version_del_registro, Agent). Se cachea por canal porque un
+# agente puede estar definido distinto en cada número (herramientas, modelo).
+_construidos: dict[tuple[str, str], tuple[int, Agent]] = {}
 
 
 def _tools_de(cfg: dict) -> list:
@@ -46,22 +48,26 @@ def _tools_de(cfg: dict) -> list:
     return tools
 
 
-def obtener(nombre: str) -> Agent[ConversationContext] | None:
-    """Agent del especialista personalizado `nombre`, o None si no existe/está off."""
-    cfg = agentes_custom.get(nombre)
+def obtener(nombre: str, canal: str = COMUN) -> Agent[ConversationContext] | None:
+    """Agent del especialista personalizado `nombre` EN ESE CANAL.
+
+    None si en ese canal no existe (puede existir sólo en el otro número) o está off.
+    """
+    c = canal_id(canal)
+    cfg = agentes_custom.get(nombre, c)
     if not cfg or not cfg.get("activo", True):
         return None
 
     ver = agentes_custom.version()
-    cacheado = _construidos.get(nombre)
+    cacheado = _construidos.get((c, nombre))
     if cacheado and cacheado[0] == ver:
         return cacheado[1]
 
     modelo = settings.model_agente if cfg.get("modelo") == "agente" else settings.model_mini
     agente = crear_especialista(nombre, _tools_de(cfg), modelo)
-    _construidos[nombre] = (ver, agente)
+    _construidos[(c, nombre)] = (ver, agente)
     log.info(
         "agente_custom_construido",
-        agente=nombre, modelo=modelo, tools=len(_tools_de(cfg)),
+        agente=nombre, canal=c or "comun", modelo=modelo, tools=len(_tools_de(cfg)),
     )
     return agente

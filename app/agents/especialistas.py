@@ -10,8 +10,11 @@ from app.agents.ventas import ventas
 ESPECIALISTAS = {"ventas": ventas, "pedido": pedido, "soporte": soporte}
 
 
-def obtener(nombre: str):
+def obtener(nombre: str, canal: str = ""):
     """Agent para `nombre`: base o PERSONALIZADO (creado desde el panel).
+
+    `canal` = número nuestro por el que entró la conversación: un agente creado sólo
+    para un número no existe para el otro.
 
     Cae a `ventas` si el nombre no existe (agente borrado a mitad de un turno,
     o un enrutado raro): mejor atender con ventas que romper el turno.
@@ -22,4 +25,4 @@ def obtener(nombre: str):
     # Import perezoso: personalizados importa las tools, que importan el catálogo.
     from app.agents.personalizados import obtener as obtener_custom
 
-    return obtener_custom(nombre) or ESPECIALISTAS["ventas"]
+    return obtener_custom(nombre, canal) or ESPECIALISTAS["ventas"]

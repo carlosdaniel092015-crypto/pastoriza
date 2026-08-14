@@ -345,7 +345,9 @@ async def procesar_turno(
 
     emisor = settings.ycloud_from or trigger.instance_from
     destino = trigger.destino_ycloud()
-    cfg = await load_config()
+    # Config DEL CANAL (número nuestro por el que entró): precios, envío, cuentas y
+    # mínimos pueden ser distintos en cada número. Sin canal propio hereda la común.
+    cfg = await load_config(emisor)
 
     texto, tipo, imagen_url, es_comprobante = await _combinar(msgs)
 
@@ -506,12 +508,13 @@ async def _correr_agente(
     ctx.agente = nombre
     ctx.permite_escalar = veredicto.permite_escalar
     ctx.motivo_determinador = veredicto.motivo
-    log.info("agente_elegido", chat_id=ctx.chat_id, agente=nombre)
+    log.info("agente_elegido", chat_id=ctx.chat_id, agente=nombre, canal=ctx.emisor)
     try:
         result = await asyncio.wait_for(
             Runner.run(
-                # obtener(): agente base o PERSONALIZADO creado desde el panel.
-                obtener_especialista(nombre),
+                # obtener(): agente base o PERSONALIZADO creado desde el panel (los
+                # personalizados pueden existir sólo en uno de los dos números).
+                obtener_especialista(nombre, ctx.emisor),
                 texto,
                 context=ctx,
                 session=session,

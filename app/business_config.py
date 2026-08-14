@@ -3,6 +3,11 @@
 Vive en Redis bajo la misma key que ya usaba n8n (`pastoriza:config`), así que
 el panel actual sigue funcionando sin cambios. Los defaults son idénticos a los
 del nodo `Load Config3`.
+
+POR CANAL: cada número de YCloud puede tener su propia configuración
+(`pastoriza:config:c:<canal>`), que se superpone sobre la común. Lo que se cambia
+dentro de un canal NO afecta al otro; para que aplique a los dos hay que pedirlo
+explícitamente (`ambos=True`). Ver `app/canales.py`.
 """
 from __future__ import annotations
 
@@ -11,6 +16,7 @@ import re
 import time
 from dataclasses import asdict, dataclass, fields
 
+from app.canales import COMUN, canal_id, formatear, key_canal
 from app.logging_conf import get_logger
 from app.settings import settings
 
@@ -26,14 +32,17 @@ def get_redis():
 
 CONFIG_KEY = "pastoriza:config"  # key literal, compartida con el panel/n8n
 
+# Campos que NUNCA se separan por canal: definen QUÉ canales existen. Si cada canal
+# guardara su propia lista, editar la lista desde un canal podría hacer desaparecer
+# al otro del panel.
+CAMPOS_COMUNES = ("canales",)
+
 
 # ------------------------------------------------------------------ canales ---
 # El bot atiende DOS números (canales de YCloud) y el panel se divide por canal.
 # El canal de una conversación es el número NUESTRO por el que entró (el `emisor`).
-def norm_num(numero: str) -> str:
-    """Deja sólo dígitos y toma los últimos 10: compara +1 809..., 1809..., 809..."""
-    d = re.sub(r"\D", "", str(numero or ""))
-    return d[-10:] if len(d) >= 10 else d
+# `norm_num` se mantiene como alias histórico de `canales.canal_id`.
+norm_num = canal_id
 
 
 def parsear_canales(texto: str) -> dict[str, str]:
@@ -56,7 +65,7 @@ def nombre_canal(emisor: str, mapa: dict[str, str] | None = None) -> str:
         return "Sin canal"
     if mapa and n in mapa:
         return mapa[n]
-    return f"{n[0:3]}-{n[3:6]}-{n[6:]}" if len(n) == 10 else n
+    return formatear(n)
 ADS_MAP_KEY = "pastoriza:ads_map"  # hash: ad_id -> JSON {product_tmpl_id, nombre}
 
 
@@ -112,48 +121,136 @@ class BusinessConfig:
             return 550.0
 
 
-_cache: tuple[float, BusinessConfig] | None = None
+_cache: dict[str, tuple[float, BusinessConfig]] = {}
+_ultima_buena: dict[str, BusinessConfig] = {}
 _CACHE_TTL = 30.0  # segundos
 
 
-async def load_config(force: bool = False) -> BusinessConfig:
-    global _cache
-    now = time.monotonic()
-    if not force and _cache and (now - _cache[0]) < _CACHE_TTL:
-        return _cache[1]
+def invalidar() -> None:
+    """Tira el cache de TODOS los canales (un cambio en el común los afecta a todos)."""
+    _cache.clear()
 
-    data: dict | None = None
+
+async def _leer_doc(key: str) -> dict | None:
+    """Documento JSON de Redis. `{}` si no existe, None si Redis falló."""
     try:
         # with_reconnect: un blip de Redis reintenta en vez de degradar de una.
         from app.redis_client import with_reconnect
 
-        raw = await with_reconnect(lambda r: r.get(CONFIG_KEY))
-        data = json.loads(raw) if raw else {}
+        raw = await with_reconnect(lambda r: r.get(key))
+        if not raw:
+            return {}
+        data = json.loads(raw)
+        return data if isinstance(data, dict) else {}
     except Exception as exc:  # noqa: BLE001
-        log.warning("config_load_failed", error=str(exc))
-        data = None
+        log.warning("config_load_failed", key=key, error=str(exc))
+        return None
 
-    if data is None:
+
+async def _guardar_doc(key: str, data: dict) -> None:
+    await get_redis().set(key, json.dumps(data, ensure_ascii=False))
+
+
+async def load_config(canal: str = COMUN, force: bool = False) -> BusinessConfig:
+    """Config EFECTIVA de un canal: la común + lo propio del canal encima.
+
+    Sin `canal` devuelve la común (la que heredan los dos números).
+    """
+    c = canal_id(canal)
+    now = time.monotonic()
+    hit = _cache.get(c)
+    if not force and hit and (now - hit[0]) < _CACHE_TTL:
+        return hit[1]
+
+    comun = await _leer_doc(CONFIG_KEY)
+    propio: dict | None = await _leer_doc(key_canal(CONFIG_KEY, c)) if c else {}
+
+    if comun is None or propio is None:
         # NO caer a los defaults hardcodeados: si el panel cambió precios, envío o
         # cuentas, cotizaríamos con valores VIEJOS y el cliente pagaría distinto.
         # Preferimos la última config buena; si no hay ninguna, ahí sí defaults.
-        if _cache:
-            log.warning("config_usando_cache_previa")
-            return _cache[1]
-        log.error("config_sin_redis_usando_defaults")
-        data = {}
+        previa = _ultima_buena.get(c) or _ultima_buena.get(COMUN)
+        if previa is not None:
+            log.warning("config_usando_cache_previa", canal=c or "comun")
+            return previa
+        log.error("config_sin_redis_usando_defaults", canal=c or "comun")
+        comun, propio = {}, {}
+
+    data = dict(comun)
+    # Los campos comunes (la lista de canales) no se pisan desde un canal.
+    data.update({k: v for k, v in propio.items() if k not in CAMPOS_COMUNES})
 
     valid = {f.name for f in fields(BusinessConfig)}
     cfg = BusinessConfig(**{k: str(v) for k, v in data.items() if k in valid})
-    _cache = (now, cfg)
+    _cache[c] = (now, cfg)
+    _ultima_buena[c] = cfg
     return cfg
 
 
-async def save_config(data: dict) -> BusinessConfig:
-    global _cache
-    await get_redis().set(CONFIG_KEY, json.dumps(data, ensure_ascii=False))
-    _cache = None
-    return await load_config(force=True)
+async def overrides_de_canal(canal: str) -> dict:
+    """Qué campos tiene PROPIOS este canal (para que el panel lo muestre)."""
+    c = canal_id(canal)
+    if not c:
+        return {}
+    return await _leer_doc(key_canal(CONFIG_KEY, c)) or {}
+
+
+async def canales_configurados() -> tuple[str, ...]:
+    """Canales declarados en la config común (los números de YCloud del negocio)."""
+    try:
+        cfg = await load_config(COMUN)
+        return tuple(parsear_canales(cfg.canales).keys())
+    except Exception as exc:  # noqa: BLE001
+        log.warning("canales_configurados_fallo", error=str(exc))
+        return ()
+
+
+async def save_config(
+    data: dict, canal: str = COMUN, ambos: bool = False
+) -> BusinessConfig:
+    """Guarda la config. Por defecto (sin canal, o con `ambos`) aplica a los DOS.
+
+    Con `canal` y sin `ambos` sólo se toca ese número: el otro sigue igual. Es lo
+    que pidió la operación: "si realizo un cambio en el 6701 no se debe aplicar al
+    1092 a menos que yo lo coloque en ambos".
+    """
+    c = canal_id(canal)
+    if ambos or not c:
+        # Aplicar a los dos: se guarda en la común y se BORRAN las propias. Si no se
+        # borraran, el canal que tuviera valores propios seguiría ignorando el cambio
+        # y el operador creería que aplicó a ambos.
+        await _guardar_doc(CONFIG_KEY, data)
+        for otro in await canales_configurados():
+            try:
+                await get_redis().delete(key_canal(CONFIG_KEY, otro))
+            except Exception as exc:  # noqa: BLE001
+                log.warning("config_canal_no_borrada", canal=otro, error=str(exc))
+        invalidar()
+        return await load_config(COMUN, force=True)
+
+    propio = {k: v for k, v in data.items() if k not in CAMPOS_COMUNES}
+    await _guardar_doc(key_canal(CONFIG_KEY, c), propio)
+    # La lista de canales es común: si vino en el formulario, va a la key común.
+    comunes = {k: v for k, v in data.items() if k in CAMPOS_COMUNES}
+    if comunes:
+        base = await _leer_doc(CONFIG_KEY)
+        base = dict(base or {})
+        base.update(comunes)
+        await _guardar_doc(CONFIG_KEY, base)
+    invalidar()
+    log.info("config_guardada_por_canal", canal=c, campos=len(propio))
+    return await load_config(c, force=True)
+
+
+async def resetear_canal(canal: str) -> BusinessConfig:
+    """Vuelve un canal a heredar la config común (borra lo propio)."""
+    c = canal_id(canal)
+    if not c:
+        raise ValueError("hay que indicar el canal")
+    await get_redis().delete(key_canal(CONFIG_KEY, c))
+    invalidar()
+    log.info("config_canal_reseteada", canal=c)
+    return await load_config(c, force=True)
 
 
 # ---------------------------------------------------------------- anuncios ---
@@ -199,6 +296,13 @@ __all__ = [
     "BusinessConfig",
     "load_config",
     "save_config",
+    "overrides_de_canal",
+    "canales_configurados",
+    "resetear_canal",
+    "invalidar",
+    "norm_num",
+    "parsear_canales",
+    "nombre_canal",
     "get_producto_de_anuncio",
     "set_producto_de_anuncio",
     "listar_anuncios",

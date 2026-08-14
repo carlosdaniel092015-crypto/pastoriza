@@ -115,9 +115,20 @@ PANEL_HTML = r"""<!doctype html>
   .canaltabs button .tot{font-size:11px;opacity:.75}
   .canaltabs button .esp{color:var(--senal);font-size:11px}
   .canaltabs .sep{flex:1}
-  /* Aviso: la sección todavía es común a los dos canales (Etapas 2 y 3). */
+  /* ALCANCE de lo que se edita: este número o los dos. Va arriba de cada sección
+     configurable para que nadie cambie un precio creyendo que aplica al otro canal. */
   .comun{background:rgba(200,87,30,.10);border:1px solid var(--line);border-left:3px solid var(--senal);
-    border-radius:var(--r);padding:9px 12px;margin-bottom:12px;font-size:12.5px;color:var(--tx)}
+    border-radius:var(--r);padding:9px 12px;margin-bottom:12px;font-size:12.5px;color:var(--tx);
+    display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+  .comun .sp{flex:1}
+  .comun label{display:inline-flex;align-items:center;gap:6px;font-size:12px;color:var(--mut);cursor:pointer}
+  .comun label:hover{color:var(--tx)}
+  /* Marca de a quién pertenece una regla/campo: sólo a este número o a los dos. */
+  .propio{font-family:var(--mono);font-size:9.5px;text-transform:uppercase;letter-spacing:.05em;
+    border:1px solid var(--senal);color:var(--senal);border-radius:3px;padding:1px 5px;margin-left:6px}
+  .propio.ambos{border-color:var(--line);color:var(--mut)}
+  .fld.esprop label:after{content:'· propio de este número';font-size:9.5px;color:var(--senal);
+    margin-left:6px;letter-spacing:.04em;text-transform:none}
   .chat .cch{font-family:var(--mono);font-size:9.5px;color:var(--mut);border:1px solid var(--line);
     border-radius:4px;padding:0 4px;margin-left:5px;opacity:.85}
   /* Quién habló último en la conversación: sin esto no se sabía si el bot contestó. */
@@ -402,7 +413,7 @@ PANEL_HTML = r"""<!doctype html>
           <h2>Configuración del negocio</h2>
           <div class="sub">Lo que el bot le dice al cliente. Los cambios se aplican al instante.</div>
           <div id="cfg"></div>
-          <div class="savebar"><span class="meta" id="cfgmsg">Sin cambios sin guardar.</span><span class="sp"></span><button class="btn sec" onclick="loadCfg()">Descartar</button><button class="btn" onclick="saveCfg()">Guardar cambios</button></div>
+          <div class="savebar"><span class="meta" id="cfgmsg">Sin cambios sin guardar.</span><span class="sp"></span><button class="btn sec" id="cfgreset" style="display:none" onclick="resetCfg()">Volver a la común</button><button class="btn sec" onclick="loadCfg()">Descartar</button><button class="btn" onclick="saveCfg()">Guardar cambios</button></div>
         </div>
       </section>
 
@@ -422,7 +433,7 @@ PANEL_HTML = r"""<!doctype html>
           <div class="stbar"><span class="d" id="pdot"></span><b id="pstate"></b><span class="meta" id="pmsg"></span></div>
           <div class="group" style="margin:12px 0">
             <h3>Crear o mapear un agente</h3>
-            <div class="gsub">Un agente necesita prompt + herramientas + cuándo se activa. Al guardarlo queda atendiendo de verdad.</div>
+            <div class="gsub">Un agente necesita prompt + herramientas + cuándo se activa. Al guardarlo queda atendiendo de verdad, <b>en el número que estás viendo</b> (o en los dos si marcás «Aplicar a los dos números» arriba).</div>
             <div class="grid">
               <div class="fld"><label>Nombre (a-z, _)</label><input id="ag_nombre" placeholder="mayorista"/><span class="hint">Identificador corto, sin espacios.</span></div>
               <div class="fld"><label>Modelo</label><select id="ag_modelo" style="background:var(--bg);border:1px solid var(--line);color:var(--tx);padding:8px 10px;border-radius:var(--r)"><option value="mini">mini (barato, recomendado)</option><option value="agente">gpt-4o (para lo delicado)</option></select></div>
@@ -528,7 +539,9 @@ async function loadStats(){
   const chatsHoy=base.filter(c=>(c.ultimo_ts||0)>=t0).length||base.length;
   const asesor=base.filter(c=>c.pausado).length;
   $('#stChats').textContent=chatsHoy; $('#stAsesor').textContent=asesor;
-  try{ const r=await api('/revision?limite=200'); $('#stRev').textContent=r.total||0; }catch(e){}
+  // La cola de revisión también es del canal elegido (si no, el contador del header
+  // mostraría casos del otro número).
+  try{ const r=await apiC('/revision?limite=200'); $('#stRev').textContent=r.total||0; }catch(e){}
 }
 
 // conversaciones
@@ -546,9 +559,19 @@ function chatsDelCanal(){ return canalSel ? chatsCache.filter(c=>(c.canal||'')==
 function eventoDelCanal(e){ if(!canalSel) return true;
   const n=String(e.emisor||'').replace(/\D/g,'').slice(-10); return n===canalSel; }
 function nombreCanalSel(){ const c=CANALES.find(x=>x.canal===canalSel); return c?c.nombre:'Todos los canales'; }
+// Toda llamada al API lleva el canal elegido: config, prompts, reglas, revisión y
+// análisis responden POR CANAL, así cambiar de pestaña cambia TODO, no sólo la lista.
+function conCanal(path){ if(!canalSel) return path;
+  return path+(path.includes('?')?'&':'?')+'canal='+encodeURIComponent(canalSel); }
+function apiC(path,opt){ return api(conCanal(path),opt); }
 function setCanal(id){ canalSel=id; localStorage.setItem('panel_canal',id);
   _chatsSig=''; cerrarHilo(); renderCanales(); renderChats(); loadStats();
-  renderFiltros(); renderFeed(); marcarComun(); }
+  renderFiltros(); renderFeed(); marcarComun();
+  // Recargar lo que se está viendo: si estás en Config y cambiás de número, tienen
+  // que aparecer los valores DE ESE número, no los del anterior.
+  const v=document.querySelector('nav.side .it.active'); const cual=v?v.dataset.v:'';
+  if(cual==='config') loadCfg(); if(cual==='prompt') loadPrompt();
+  if(cual==='aprendizaje') loadAprendizaje(); }
 function renderCanales(){ const el=$('#canaltabs'); if(!el)return;
   if(CANALES.length<2){ el.style.display='none'; return; }  // un solo número: sin pestañas
   el.style.display='flex';
@@ -560,20 +583,28 @@ function renderCanales(){ const el=$('#canaltabs'); if(!el)return;
   el.innerHTML=CANALES.map(c=>tab(c.canal,c.nombre,c.total,c.esperando)).join('')
     +tab('','Todos',tot,esp);
 }
-// Honestidad: Config, Prompt y Aprendizaje TODAVÍA son comunes a los dos números
-// (eso se separa en las Etapas 2 y 3). Sin este aviso, alguien podría cambiar un
-// precio creyendo que aplica sólo al canal en el que está.
-const SECCIONES_COMUNES={config:'la configuración del negocio',prompt:'los prompts de los agentes',aprendizaje:'las reglas y el aprendizaje'};
+// ALCANCE de cada sección configurable: cada número tiene su propia configuración,
+// sus prompts y sus reglas. El aviso dice a QUIÉN le va a aplicar lo que guardes, y
+// el check "aplicar a los dos" es la única forma de tocar el otro número.
+const SECCIONES_COMUNES={config:'la configuración del negocio',prompt:'el prompt del agente',aprendizaje:'las reglas y correcciones'};
+const CHK_AMBOS={config:'cfg_ambos',prompt:'p_ambos',aprendizaje:'ap_ambos'};
+function ambosDe(v){ const c=$('#'+CHK_AMBOS[v]); return !!(c&&c.checked); }
 function marcarComun(){
   for(const [v,qué] of Object.entries(SECCIONES_COMUNES)){
     const sec=$('#v-'+v); if(!sec) continue;
     let av=sec.querySelector('.comun');
+    if(!av){ av=document.createElement('div'); av.className='comun';
+      const pane=sec.querySelector('.pane')||sec;
+      // Después del título y el subtítulo, antes del contenido.
+      const ref=pane.querySelector('.sub'); if(ref&&ref.nextSibling)pane.insertBefore(av,ref.nextSibling); else pane.insertBefore(av,pane.firstChild); }
+    const chk=CHK_AMBOS[v];
     if(canalSel){
-      if(!av){ av=document.createElement('div'); av.className='comun';
-        const pane=sec.querySelector('.pane')||sec; pane.insertBefore(av,pane.firstChild); }
-      av.innerHTML='⚠️ Estás en <b>'+esc(nombreCanalSel())+'</b>, pero '+qué+
-        ' todavía es <b>común a los dos números</b>: lo que cambies acá aplica a ambos.';
-    } else if(av){ av.remove(); }
+      av.innerHTML='Estás editando <b>'+esc(nombreCanalSel())+'</b>. Lo que guardes acá aplica <b>sólo a ese número</b>; el otro sigue igual.'+
+        '<span class="sp"></span><label title="Guardar el mismo valor en los dos números"><input type="checkbox" id="'+chk+'"/> Aplicar a los dos números</label>';
+    } else {
+      av.innerHTML='Estás en <b>Todos los canales</b>: acá se edita '+qué+' <b>común</b>, la que heredan los dos números.'+
+        '<span class="sp"></span><label class="meta">Elegí un número arriba para configurarlo aparte.</label>';
+    }
   }
 }
 // Prefijo de quién habló último en la conversación (el cliente, el bot o un asesor).
@@ -769,21 +800,36 @@ function copiarError(id){ const e=alerts.find(x=>x.id===id); if(!e)return; const
 const GRUPOS=[{t:'Envío y entrega',s:'Costo, días y notas de envío.',campos:['precio_envio','dias_envio','hora_corte','nota_envio','info_envio','minimo_envio']},{t:'Pagos',s:'Formas de pago, mínimo, cuentas y comprobante.',campos:['monto_minimo','formas_pago','contra_entrega','banco1_nombre','banco1_cuenta','banco2_nombre','banco2_cuenta','titular','cedula','msg_comprobante']},{t:'Negocio',s:'Datos de la tienda.',campos:['direccion','telefono','horario_tienda','website','maps_url']},{t:'Venta por fardo (opcional)',s:'Déjalo vacío hasta confirmar cantidad por fardo y su envío mínimo.',campos:['fardo_cantidad','fardo_envio_minimo']},{t:'Mensajes del bot',s:'Notas y frases que usa el bot.',campos:['nota_botellon','nota_stock','msg_escalar']}];
 const LBL={precio_envio:'Precio de envío',dias_envio:'Días de entrega',hora_corte:'Hora de corte',nota_envio:'Notas de envío',info_envio:'Info de envío',banco1_nombre:'Banco',banco1_cuenta:'Número de cuenta',banco2_nombre:'Banco 2',banco2_cuenta:'Número de cuenta 2',titular:'Titular',cedula:'RNC',msg_comprobante:'Mensaje de comprobante',direccion:'Dirección',telefono:'Teléfono',horario_tienda:'Horario',website:'Website',maps_url:'Enlace de Maps',nota_botellon:'Nota de botellón',nota_stock:'Cuando no hay stock',msg_escalar:'Cuando pasa a un asesor',monto_minimo:'Pedido mínimo (RD$)',minimo_envio:'Mínimo para envío (por tamaño)',formas_pago:'Formas de pago',contra_entrega:'¿Pago contra entrega?',fardo_cantidad:'Unidades por fardo',fardo_envio_minimo:'Envío mínimo por fardo'};
 const HINTS={precio_envio:'En el chat: "El envío dentro del Gran Santo Domingo son RD$ …"',hora_corte:'Después de esa hora el pedido sale al día siguiente.',msg_comprobante:'Se envía justo después de dar la cuenta.',msg_escalar:'En el chat aparece antes de "Pasado a un asesor".'};
-let cfgDirty=0;
-async function loadCfg(){ const d=await api('/config'); cfgDirty=0;
+let cfgDirty=0, cfgPropios=[];
+async function loadCfg(){ marcarComun(); const d=await apiC('/config'); cfgDirty=0;
+  cfgPropios=d._propios||[];
   $('#cfg').innerHTML=GRUPOS.map(g=>`<div class="group"><h3>${g.t}</h3><div class="gsub">${g.s}</div><div class="grid">`+g.campos.map(k=>{const v=esc(String(d[k]!=null?d[k]:''));
     const hint=HINTS[k]?`<span class="hint">${HINTS[k]}</span>`:'';
-    if(k==='precio_envio')return `<div class="fld"><label>${LBL[k]}</label><div class="prefix"><span>RD$</span><input id="cfg_${k}" value="${v}" oninput="cfgTouch()"/></div>${hint}</div>`;
+    // `esprop`: este campo ya tiene un valor PROPIO de este número (no sigue al común).
+    const pr=cfgPropios.includes(k)?' esprop':'';
+    if(k==='precio_envio')return `<div class="fld${pr}"><label>${LBL[k]}</label><div class="prefix"><span>RD$</span><input id="cfg_${k}" value="${v}" oninput="cfgTouch()"/></div>${hint}</div>`;
     const long=['info_envio','msg_comprobante','msg_escalar','nota_envio'].includes(k);
-    return `<div class="fld" ${long?'style="grid-column:1/-1"':''}><label>${LBL[k]||k}</label>${long?`<textarea id="cfg_${k}" style="min-height:70px" oninput="cfgTouch()">${v}</textarea>`:`<input id="cfg_${k}" value="${v}" oninput="cfgTouch()"/>`}${hint}</div>`;
+    return `<div class="fld${pr}" ${long?'style="grid-column:1/-1"':''}><label>${LBL[k]||k}</label>${long?`<textarea id="cfg_${k}" style="min-height:70px" oninput="cfgTouch()">${v}</textarea>`:`<input id="cfg_${k}" value="${v}" oninput="cfgTouch()"/>`}${hint}</div>`;
   }).join('')+`</div></div>`).join('');
-  $('#cfgmsg').textContent='Sin cambios sin guardar.'; }
+  // Volver a heredar la común: sólo tiene sentido dentro de un canal con valores propios.
+  const rb=$('#cfgreset'); if(rb) rb.style.display=(canalSel&&cfgPropios.length)?'inline-flex':'none';
+  $('#cfgmsg').textContent=canalSel
+    ? (cfgPropios.length?cfgPropios.length+' campo(s) propios de este número.':'Este número hereda la config común.')
+    : 'Sin cambios sin guardar.'; }
 function cfgTouch(){ cfgDirty++; $('#cfgmsg').innerHTML='<span class="warn">'+cfgDirty+' cambio(s) sin guardar</span>'; }
-async function saveCfg(){ const data={}; document.querySelectorAll('[id^=cfg_]').forEach(i=>data[i.id.slice(4)]=i.value); await api('/config',{method:'POST',body:JSON.stringify(data)}); cfgDirty=0; $('#cfgmsg').innerHTML='<span class="ok">Guardado ✓</span>'; }
+async function saveCfg(){ const data={}; document.querySelectorAll('[id^=cfg_]').forEach(i=>data[i.id.slice(4)]=i.value);
+  data._ambos=ambosDe('config');
+  if(canalSel&&data._ambos&&!confirm('¿Aplicar esta configuración a los DOS números? Se reemplaza también la del otro canal.'))return;
+  await apiC('/config',{method:'POST',body:JSON.stringify(data)}); cfgDirty=0;
+  $('#cfgmsg').innerHTML='<span class="ok">Guardado ✓ '+(data._ambos||!canalSel?'(los dos números)':'(sólo '+esc(nombreCanalSel())+')')+'</span>';
+  await loadCfg(); }
+async function resetCfg(){ if(!canalSel)return;
+  if(!confirm('¿Que '+nombreCanalSel()+' vuelva a usar la configuración común? Se borran sus valores propios.'))return;
+  await apiC('/config',{method:'DELETE'}); await loadCfg(); }
 
 // prompt
 let PROMPTS={}, PACKS_AG={}, AGENTES_CUSTOM=[];
-async function loadPrompt(){ const d=await api('/prompts'); PROMPTS=d.prompts||{};
+async function loadPrompt(){ marcarComun(); const d=await apiC('/prompts'); PROMPTS=d.prompts||{};
   PACKS_AG=d.packs||{}; AGENTES_CUSTOM=d.personalizados||[];
   const sel=$('#pagente'); const prev=sel.value;
   sel.innerHTML=(d.agentes||[]).map(a=>{const cst=AGENTES_CUSTOM.some(c=>c.nombre===a);
@@ -794,9 +840,14 @@ function pintarPacks(){ const el=$('#ag_packs'); if(!el)return;
   el.innerHTML=Object.keys(PACKS_AG).length?Object.entries(PACKS_AG).map(([k,v])=>
     `<label style="display:block;margin:3px 0"><input type="checkbox" class="agpack" value="${k}"/> <b>${esc(k)}</b> — ${esc(v)}</label>`).join('')
     :'<span class="empty">—</span>'; }
+// Marca si algo es propio de este número o común a los dos.
+function chipCanal(canal){ return canal
+  ? '<span class="propio">sólo '+esc(nombreDeCanal(canal))+'</span>'
+  : '<span class="propio ambos">los dos números</span>'; }
+function nombreDeCanal(id){ const c=CANALES.find(x=>x.canal===id); return c?c.nombre:(id||'común'); }
 function pintarAgentes(){ const el=$('#ag_lista'); if(!el)return;
   el.innerHTML=AGENTES_CUSTOM.length?AGENTES_CUSTOM.map(a=>
-    `<div class="rrow"><span class="rt"><b>${esc(a.nombre)}</b> — ${esc(a.descripcion||'sin descripción')}<br>
+    `<div class="rrow"><span class="rt"><b>${esc(a.nombre)}</b>${chipCanal(a.canal||'')} — ${esc(a.descripcion||'sin descripción')}<br>
       <span class="meta">activa con: ${esc((a.palabras||[]).join(', ')||'(sólo por IA)')} · herramientas: ${esc((a.herramientas||[]).join(', ')||'ninguna')} · ${esc(a.modelo||'mini')}</span></span>
       <button class="rx" title="Eliminar" onclick="borrarAgente('${esc(a.nombre)}')">×</button></div>`).join('')
     :'<div class="empty">Todavía no creaste agentes. Los base (ventas, pedido, soporte) siguen funcionando.</div>'; }
@@ -807,27 +858,38 @@ async function crearAgente(){
   const prompt=$('#ag_prompt').value||'';
   const herramientas=[...document.querySelectorAll('.agpack:checked')].map(c=>c.value);
   const palabras=($('#ag_palabras').value||'').split(',').map(s=>s.trim()).filter(Boolean);
-  const body={nombre,descripcion:$('#ag_desc').value||'',herramientas,palabras,modelo:$('#ag_modelo').value,prompt};
-  try{ const r=await fetch('/panel/api/agentes',{method:'POST',headers:headers(),body:JSON.stringify(body)});
+  const ambos=ambosDe('prompt');
+  const body={nombre,descripcion:$('#ag_desc').value||'',herramientas,palabras,modelo:$('#ag_modelo').value,prompt,ambos};
+  try{ const r=await fetch('/panel/api'+conCanal('/agentes'),{method:'POST',headers:headers(),body:JSON.stringify(body)});
     const d=await r.json().catch(()=>({}));
     if(!r.ok){ $('#ag_msg').innerHTML='<span class="bad">'+esc(d.detail||('Error '+r.status))+'</span>'; return; }
-    $('#ag_msg').innerHTML='<span class="ok">Agente "'+esc(nombre)+'" creado ✓ ya atiende conversaciones</span>';
+    const donde=(ambos||!canalSel)?'en los dos números':'sólo en '+nombreCanalSel();
+    $('#ag_msg').innerHTML='<span class="ok">Agente "'+esc(nombre)+'" creado ✓ ya atiende conversaciones '+esc(donde)+'</span>';
     $('#ag_nombre').value='';$('#ag_desc').value='';$('#ag_palabras').value='';$('#ag_prompt').value='';
     document.querySelectorAll('.agpack:checked').forEach(c=>c.checked=false);
     await loadPrompt();
   }catch(e){ $('#ag_msg').innerHTML='<span class="bad">Error: '+esc(String(e))+'</span>'; } }
 async function borrarAgente(nombre){ if(!confirm('¿Eliminar el agente "'+nombre+'"? Sus conversaciones futuras las tomarán los agentes base.'))return;
-  try{ await api('/agentes/'+encodeURIComponent(nombre),{method:'DELETE'}); await loadPrompt(); }
+  try{ await apiC('/agentes/'+encodeURIComponent(nombre),{method:'DELETE'}); await loadPrompt(); }
   catch(e){ alert('No se pudo eliminar: '+e); } }
 function mostrarPrompt(){ const a=$('#pagente').value,p=PROMPTS[a]||{}; $('#pov').value=p.override||''; $('#pbase').value=p.base||'';
   const ov=p.usando_override; $('#pdot').className='d'+(ov?'':' base');
-  $('#pstate').textContent=ov?('Usando override · '+((p.override||'').length)+' caracteres'):'Usando prompt base'; $('#pmsg').textContent='';
+  // De dónde sale el prompt que ESTE número está usando ahora mismo.
+  const de={canal:'propio de '+nombreCanalSel(),comun:'común a los dos números',base:'.md base'}[p.origen||'base'];
+  $('#pstate').textContent=ov?('Usando override ('+de+') · '+((p.override||'').length)+' caracteres')
+                             :'Usando prompt base (.md)';
+  $('#pmsg').textContent='';
   syncGutter(); syncGutterBase(); }
 function gut(el,ta){ if(!el||!ta)return; const n=(ta.value.match(/\n/g)||[]).length+1; let g=''; for(let i=1;i<=n;i++)g+=i+'\n'; el.textContent=g; el.scrollTop=ta.scrollTop; }
 function syncGutter(){ gut($('#pgut'),$('#pov')); }
 function syncGutterBase(){ gut($('#pgutb'),$('#pbase')); }
-async function savePrompt(){ const a=$('#pagente').value; try{ const d=await api('/prompts/'+a,{method:'POST',body:JSON.stringify({override:$('#pov').value})}); $('#pmsg').innerHTML='<span class="ok">Guardado ✓ ('+(d.usando_override?'override':'base')+')</span>'; await loadPrompt(); }catch(e){ $('#pmsg').innerHTML='<span class="bad">Error (¿mínimo 40 caracteres?)</span>'; } setTimeout(()=>$('#pmsg').textContent='',3500); }
-async function resetPrompt(){ if(!confirm('¿Volver al .md base de este agente?'))return; $('#pov').value=''; await savePrompt(); }
+async function savePrompt(){ const a=$('#pagente').value; const ambos=ambosDe('prompt');
+  if(canalSel&&ambos&&!confirm('¿Guardar este prompt para los DOS números?'))return;
+  try{ const d=await apiC('/prompts/'+a,{method:'POST',body:JSON.stringify({override:$('#pov').value,ambos})});
+    const de={canal:'sólo '+nombreCanalSel(),comun:'los dos números',base:'.md base'}[d.origen||'base'];
+    $('#pmsg').innerHTML='<span class="ok">Guardado ✓ ('+esc(de)+')</span>'; await loadPrompt();
+  }catch(e){ $('#pmsg').innerHTML='<span class="bad">Error (¿mínimo 40 caracteres?)</span>'; } setTimeout(()=>$('#pmsg').textContent='',3500); }
+async function resetPrompt(){ if(!confirm(canalSel?('¿Que '+nombreCanalSel()+' vuelva a usar el prompt heredado (común o .md base)?'):'¿Volver al .md base de este agente?'))return; $('#pov').value=''; await savePrompt(); }
 async function guardarBaseComoOverride(){ const t=$('#pbase').value; if(t.trim().length<40){ $('#pmsg').innerHTML='<span class="bad">Mínimo 40 caracteres</span>'; return; } $('#pov').value=t; syncGutter(); await savePrompt(); }
 function subirMd(ev){ const f=ev.target.files[0]; if(!f)return; const rd=new FileReader(); rd.onload=()=>{ $('#pov').value=rd.result; syncGutter(); $('#pmsg').innerHTML='<span class="meta">Archivo cargado; dale Guardar.</span>'; }; rd.readAsText(f); ev.target.value=''; }
 
@@ -836,27 +898,29 @@ function normR(s){ return (s||'').toLowerCase().normalize('NFD').replace(/[̀-ͯ
 function simil(a,b){ const A=new Set(normR(a)),B=new Set(normR(b)); if(!A.size||!B.size)return 0; let inter=0; A.forEach(x=>{if(B.has(x))inter++;}); return inter/new Set([...A,...B]).size; }
 function detectarDup(reglas){ for(let i=0;i<reglas.length;i++)for(let j=i+1;j<reglas.length;j++){ if(simil(reglas[i].texto,reglas[j].texto)>=0.6) return {i,j}; } return null; }
 async function combinar(id){ if(!confirm('¿Eliminar la regla duplicada y quedarte con una sola?'))return; await api('/reglas/'+id,{method:'DELETE'}); loadAprendizaje(); }
-async function loadAprendizaje(){ const d=await api('/aprendizaje'); const sugs=d.sugerencias||[],reglas=d.reglas||[],correc=d.correcciones||[];
+async function loadAprendizaje(){ marcarComun(); const d=await apiC('/aprendizaje'); const sugs=d.sugerencias||[],reglas=d.reglas||[],correc=d.correcciones||[];
   const pend=sugs.filter(s=>s.estado==='pendiente'); const bs=$('#badgeSug'); if(pend.length){bs.style.display='block';bs.textContent=pend.length;}else bs.style.display='none';
   $('#hsug').textContent=pend.length; $('#hreg').textContent=reglas.length;
   $('#sugs').innerHTML=sugs.length?sugs.map(s=>{const st=s.estado==='pendiente'?'':(s.estado==='aprobada'?'<span class="ok">✓ aprobada</span>':'<span class="bad">✕ descartada</span>');
     const chip=`<span class="rchip ${s.riesgo==='alto'?'alto':'bajo'}">Riesgo ${s.riesgo}</span>`;
     const btns=s.estado==='pendiente'?`<div style="margin-top:8px"><button class="btn sm" onclick="aprobarSug(${s.id})">Aprobar</button> <button class="btn sec sm" onclick="rechazarSug(${s.id})">Descartar</button></div>`:'';
     const oc=s.origen_chats||[]; const src=oc.length?`<div class="meta" style="margin-top:4px">De: `+oc.slice(0,6).map(id=>`<a href="#" onclick="verConv('${esc(String(id))}');return false" style="color:var(--senal)">${esc(String(id))}</a>`).join(', ')+`</div>`:'';
-    return `<div class="group">${chip} <span class="meta">${esc(s.origen||'')}</span> ${st}<div style="margin:6px 0;font-weight:600">${esc(s.contenido)}</div>${src}${btns}</div>`;}).join(''):'<div class="empty">Nada que revisar. El bot responde según lo esperado.</div>';
+    return `<div class="group">${chip} <span class="meta">${esc(s.origen||'')}</span>${chipCanal(s.canal||'')} ${st}<div style="margin:6px 0;font-weight:600">${esc(s.contenido)}</div>${src}${btns}</div>`;}).join(''):'<div class="empty">Nada que revisar. El bot responde según lo esperado.</div>';
   const dup=detectarDup(reglas);
   let rhtml=dup?`<div class="dupwarn"><span>2 reglas muy parecidas · las número ${dup.i+1} y ${dup.j+1} dicen lo mismo</span><button class="btn sec sm" onclick="combinar(${reglas[dup.j].id})">Combinar</button></div>`:'';
   rhtml+=reglas.length?reglas.map((r,i)=>{const isdup=dup&&(i===dup.i||i===dup.j);
-    return `<div class="rrow ${isdup?'dup':''}"><span class="rn">${String(i+1).padStart(2,'0')}</span><span class="rt">${esc(r.texto)}</span><span class="ro">(${esc(r.origen||'manual')})</span><button class="rx" onclick="delRegla(${r.id})">×</button></div>`;}).join(''):'<div class="empty">Sin reglas.</div>';
+    // El chip dice si la regla es de este número o de los dos: sin eso no se sabe
+    // por qué el otro canal no la está aplicando.
+    return `<div class="rrow ${isdup?'dup':''}"><span class="rn">${String(i+1).padStart(2,'0')}</span><span class="rt">${esc(r.texto)}${chipCanal(r.canal||'')}</span><span class="ro">(${esc(r.origen||'manual')})</span><button class="rx" onclick="delRegla(${r.id})">×</button></div>`;}).join(''):'<div class="empty">Sin reglas.</div>';
   $('#reglas').innerHTML=rhtml;
-  $('#correcciones').innerHTML=correc.length?correc.map(c=>`<div class="group" style="padding:10px 12px"><div><b>Si:</b> ${esc(c.situacion)}</div><div><b>Responde:</b> ${esc(c.respuesta_correcta)}</div><button class="btn sec sm" style="margin-top:6px" onclick="delCorreccion(${c.id})">Borrar</button></div>`).join(''):'<div class="empty">Sin correcciones.</div>'; }
-async function addRegla(){ const t=$('#regin').value.trim(); if(t.length<5)return; $('#regin').value=''; await api('/reglas',{method:'POST',body:JSON.stringify({texto:t})}); loadAprendizaje(); }
-async function delRegla(id){ await api('/reglas/'+id,{method:'DELETE'}); loadAprendizaje(); }
-async function addCorreccion(){ const s=$('#corsit').value.trim(),r=$('#corresp').value.trim(); if(!s||!r)return; $('#corsit').value='';$('#corresp').value=''; await api('/correcciones',{method:'POST',body:JSON.stringify({situacion:s,respuesta_correcta:r})}); loadAprendizaje(); }
-async function delCorreccion(id){ await api('/correcciones/'+id,{method:'DELETE'}); loadAprendizaje(); }
+  $('#correcciones').innerHTML=correc.length?correc.map(c=>`<div class="group" style="padding:10px 12px"><div><b>Si:</b> ${esc(c.situacion)}${chipCanal(c.canal||'')}</div><div><b>Responde:</b> ${esc(c.respuesta_correcta)}</div><button class="btn sec sm" style="margin-top:6px" onclick="delCorreccion(${c.id})">Borrar</button></div>`).join(''):'<div class="empty">Sin correcciones.</div>'; }
+async function addRegla(){ const t=$('#regin').value.trim(); if(t.length<5)return; $('#regin').value=''; await apiC('/reglas',{method:'POST',body:JSON.stringify({texto:t,ambos:ambosDe('aprendizaje')})}); loadAprendizaje(); }
+async function delRegla(id){ await apiC('/reglas/'+id,{method:'DELETE'}); loadAprendizaje(); }
+async function addCorreccion(){ const s=$('#corsit').value.trim(),r=$('#corresp').value.trim(); if(!s||!r)return; $('#corsit').value='';$('#corresp').value=''; await apiC('/correcciones',{method:'POST',body:JSON.stringify({situacion:s,respuesta_correcta:r,ambos:ambosDe('aprendizaje')})}); loadAprendizaje(); }
+async function delCorreccion(id){ await apiC('/correcciones/'+id,{method:'DELETE'}); loadAprendizaje(); }
 async function aprobarSug(id){ await api('/sugerencias/'+id+'/aprobar',{method:'POST'}); loadAprendizaje(); }
 async function rechazarSug(id){ await api('/sugerencias/'+id+'/rechazar',{method:'POST'}); loadAprendizaje(); }
-async function analizar(){ $('#anmsg').textContent='Analizando…'; try{ const d=await api('/sugerencias/analizar',{method:'POST'}); $('#anmsg').innerHTML='<span class="ok">Listo: '+(d.sugeridas||0)+' sugerencia(s), '+(d.auto_aplicadas||0)+' aplicada(s).</span>'; }catch(e){ $('#anmsg').innerHTML='<span class="bad">Error al analizar</span>'; } loadAprendizaje(); }
+async function analizar(){ $('#anmsg').textContent='Analizando…'; try{ const d=await apiC('/sugerencias/analizar',{method:'POST'}); $('#anmsg').innerHTML='<span class="ok">Listo: '+(d.sugeridas||0)+' sugerencia(s), '+(d.auto_aplicadas||0)+' aplicada(s).</span>'; }catch(e){ $('#anmsg').innerHTML='<span class="bad">Error al analizar</span>'; } loadAprendizaje(); }
 
 // ---------------------------------------------------------- PWA ---
 let swReg=null, deferredPrompt=null;
