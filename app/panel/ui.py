@@ -697,10 +697,12 @@ function tituloSem(c){
 }
 // ---- Módulo Semáforo: las conversaciones agrupadas por color ----
 // Se arma con `chatsCache`, que el poll ya trae: no pide nada nuevo al servidor.
+// El orden de las columnas es el del EMBUDO, de frío a cerrado, como lo pidió la
+// operación: sin señales → interesado → cerca de cerrar → pedido creado.
 const COLS=[
-  {k:'verde',    t:'Cerca de cerrar',  e:'Pidió las cuentas, cotizó sobre el mínimo, dio dirección o ya dice que pagó. Estos son los que conviene llamar primero.'},
-  {k:'amarillo', t:'Interesado',       e:'Avanzó algo (cotizó, eligió envío o retiro) pero todavía no llegó al momento de pagar.'},
   {k:'gris',     t:'Sin señales aún',  e:'Todavía no hizo nada medible. NO significa que no vaya a comprar: muchos preguntan hoy y compran semanas después.'},
+  {k:'amarillo', t:'Interesado',       e:'Avanzó algo (cotizó, eligió envío o retiro) pero todavía no llegó al momento de pagar.'},
+  {k:'verde',    t:'Cerca de cerrar',  e:'Pidió las cuentas, cotizó sobre el mínimo, dio dirección o ya dice que pagó. Estos son los que conviene llamar primero.'},
   {k:'cerrado',  t:'Pedido creado',    e:'Ya pagó y su pedido está en Odoo. No necesita llamada de venta.'},
 ];
 function grupoSem(c){ return c.sem || 'gris'; }   // sin datos se muestra con los grises
