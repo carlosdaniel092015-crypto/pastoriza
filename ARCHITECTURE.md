@@ -49,7 +49,7 @@ Telegram (alertas, opcional). Windows en dev; destino de producción: Dokploy.
 | **Cerebro** | `app/agents/*`, `app/tools/*` | Enrutador + 3 especialistas; herramientas de catálogo, cotización y Odoo. |
 | **Integraciones** | `app/odoo.py`, `app/ycloud.py`, `app/media.py`, `app/catalogo.py` | ERP, envío WhatsApp, visión/transcripción, catálogo. |
 | **Estado/Memoria** | `app/redis_client.py`, `app/session.py`, `app/estado.py` | Redis: sesión, pausa, ventana 24h, locks, ids del bot, cola de revisión. |
-| **Operación/Mejora** | `app/panel/*` | Panel CRM en vivo, alertas, config, prompts por-agente, aprendizaje, kill-switch. |
+| **Operación/Mejora** | `app/panel/*`, `app/pagos.py`, `app/aprobacion.py` | Panel CRM en vivo, alertas, config, prompts por-agente, aprendizaje, kill-switch, aprobación del pago por el supervisor (ADR-013). |
 
 ---
 
@@ -145,6 +145,37 @@ re-entrena solo. Fine-tuning queda diferido a cuando haya volumen.
 **Decisión:** el bot registra los ids que envía; si llega un saliente cuyo id no es suyo = lo
 escribió un humano desde YCloud → pausa 30m ese chat. Fail-safe: ante duda, no pausa.
 **Consecuencias:** el humano puede intervenir desde WhatsApp y el bot se aparta solo.
+
+### ADR-013 · El bot no aprueba pagos: los aprueba el supervisor, desde WhatsApp
+**Contexto:** regla del negocio, textual: *"el bot no puede recibir pagos, sólo puede hacer
+cotizaciones; solo yo, el supervisor del 6701, apruebo"*. Antes el bot, al ver un comprobante,
+le confirmaba al cliente que su pedido quedaba "registrado exitosamente" — o sea, daba por
+buena una transferencia que nadie miró.
+**Decisión:** el comprobante sigue creando el pedido y adjuntándose en Odoo (eso es trabajo
+adelantado, no una confirmación), pero:
+
+- La respuesta al cliente la fija el CÓDIGO, no el modelo: `_sanear` reemplaza lo que haya
+  redactado por `cfg.msg_comprobante` ("estamos verificando tu pago"). El prompt también lo
+  prohíbe, pero un prompt es una sugerencia; esto es determinista.
+- El pago queda `pendiente` en el chatmeta (`events.guardar_aprobacion`).
+- Al supervisor le llega una **plantilla de WhatsApp** (`aprobacion_pago`, ver
+  `PLANTILLA_META.md`) con la **foto del comprobante** en la cabecera, el cliente con su
+  dirección, los productos con cantidades y subtotal/ITBIS/envío/total, y dos botones.
+- El número de pedido sale **sólo** de aprobar: por el botón (webhook) o por el panel. Rechazar
+  NO le escribe nada al cliente a propósito — decirle a alguien que su pago no sirve lo hace
+  una persona, con el motivo real.
+
+La lógica vive en **un** lugar (`app/pagos.py`) porque la acción entra por dos puertas (botón y
+panel), y la parte pura —montos, texto y parseo del botón— en `app/aprobacion.py`, que se testea
+entera sin Redis ni HTTP. Sólo `ADMIN_PHONE` puede aprobar, comparando por los últimos 10
+dígitos (el mismo número llega con y sin `+1`).
+**Consecuencias:** el comprobante hay que **republicarlo** en nuestro dominio
+(`app/media_publica.py` → `/panel/media/...`), porque las URLs de media de YCloud exigen
+`X-API-Key` y Meta no puede descargarlas. Los topes de WhatsApp mandan en el diseño: las
+variables van sin saltos de línea (los productos en una línea separada por `·`), el cuerpo entra
+en 1024 caracteres y el payload del botón en 128. Si Meta todavía no aprobó la plantilla, el
+envío falla y el sistema cae al aviso de siempre + cola de revisión: el pago queda pendiente en
+el panel, que es la otra puerta. El supervisor también puede escribir `aprobar 160` a mano.
 
 ### ADR-012 · Semáforo de cierre: priorizar atención humana, nunca degradar el bot
 **Contexto:** la operación pidió "filtrar los clientes que sí van a comprar de los que hacen

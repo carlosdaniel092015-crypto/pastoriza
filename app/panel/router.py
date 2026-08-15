@@ -8,7 +8,6 @@ from __future__ import annotations
 import asyncio
 import hmac
 import json
-import secrets
 import time
 from pathlib import Path
 from typing import Any
@@ -24,6 +23,7 @@ from fastapi import (
 )
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Response
 
+from app import media_publica, pagos
 from app.media import convertir_a_jpg, convertir_audio_ogg
 
 from app.business_config import (
@@ -708,55 +708,12 @@ async def api_aprobar_pago(
     una toma de control del chat.
     """
     _auth(x_panel_token)
-    meta = await events.leer_chatmeta(chat_id)
-    apro = meta.get("aprobacion") or {}
-    order_id = apro.get("order_id")
-    if not order_id:
+    res = await pagos.aprobar(chat_id, via="panel")
+    if not res.get("ok"):
         raise HTTPException(
-            status_code=400,
-            detail="esta conversación no tiene un pago pendiente de aprobación",
+            status_code=int(res.get("status", 400)), detail=res.get("error", "")
         )
-    if apro.get("estado") == "aprobado":
-        return {"ok": True, "ya_estaba": True, "order_id": order_id}
-
-    emisor = meta.get("emisor") or settings.ycloud_from
-    destino = meta.get("destino") or {"to": chat_id}
-    cfg = await load_config(emisor)
-    plantilla = cfg.msg_pago_aprobado or ""
-    try:
-        texto = plantilla.format(numero=order_id)
-    except (KeyError, IndexError, ValueError):
-        # Si alguien dejó una llave rara en el mensaje editable, no se rompe el envío.
-        texto = f"{plantilla} (pedido {order_id})".strip()
-
-    enviado = False
-    try:
-        enviado = await ycloud.enviar_texto(destino, emisor, texto, simular_tipeo=False)
-    except Exception as exc:  # noqa: BLE001
-        log.warning("aprobar_pago_envio_fallo", chat_id=chat_id, error=str(exc))
-    if not enviado:
-        # No se marca aprobado si el cliente no recibió nada: quedaría creyendo que
-        # sigue en verificación y nadie volvería a mirarlo.
-        log.error("aprobar_pago_no_enviado", chat_id=chat_id, order_id=order_id)
-        raise HTTPException(
-            status_code=502,
-            detail="no se pudo enviar el mensaje al cliente; el pago sigue pendiente",
-        )
-
-    await events.guardar_aprobacion(chat_id, "aprobado", order_id)
-    await RedisSession(chat_id).add_items([{"role": "assistant", "content": texto}])
-    await events.publicar(
-        "order", chat_id, emisor=emisor, user_name=meta.get("user_name", ""),
-        detalle=f"Pago APROBADO por el supervisor · pedido {order_id}",
-        order_id=order_id,
-    )
-    await events.tocar_chatmeta(
-        chat_id, emisor=emisor, destino=destino,
-        user_name=meta.get("user_name", ""), telefono=meta.get("telefono", ""),
-        ultimo=texto, ultimo_de="bot",
-    )
-    log.info("pago_aprobado", chat_id=chat_id, order_id=order_id)
-    return {"ok": True, "order_id": order_id, "enviado": True}
+    return res
 
 
 @panel_router.post("/api/chats/{chat_id}/rechazar-pago")
@@ -775,46 +732,28 @@ async def api_rechazar_pago(
     except Exception:  # noqa: BLE001
         data = {}
     motivo = str((data or {}).get("motivo", "")).strip()
-    meta = await events.leer_chatmeta(chat_id)
-    apro = meta.get("aprobacion") or {}
-    if not apro:
-        raise HTTPException(status_code=400, detail="no hay un pago pendiente")
-
-    await events.guardar_aprobacion(chat_id, "rechazado", apro.get("order_id"), motivo)
-    await encolar_revision(
-        chat_id, ["pago_rechazado"], motivo or "(sin motivo)",
-        apro.get("order_id"), meta.get("user_name", ""),
-    )
-    await events.publicar(
-        "revision", chat_id, emisor=meta.get("emisor", ""),
-        user_name=meta.get("user_name", ""), motivos=["pago_rechazado"],
-        resumen=motivo[:200] or "Pago no aprobado por el supervisor",
-    )
-    log.info("pago_rechazado", chat_id=chat_id, order_id=apro.get("order_id"))
-    return {"ok": True, "order_id": apro.get("order_id")}
+    res = await pagos.rechazar(chat_id, motivo, via="panel")
+    if not res.get("ok"):
+        raise HTTPException(
+            status_code=int(res.get("status", 400)), detail=res.get("error", "")
+        )
+    return res
 
 
 # ------------------------------------------------ respuesta con imagen ---
-# Cache transitorio en memoria: el supervisor sube una imagen desde el panel y
-# YCloud la fetchea de /panel/media/{token} para reenviarla al cliente. 1 worker
-# (ver Dockerfile), así que un dict por proceso alcanza; se acota para no crecer.
-_MEDIA_CACHE: dict[str, tuple[str, bytes]] = {}  # token -> (content_type, bytes)
-_MEDIA_MAX = 50
-
-
+# El supervisor sube una imagen desde el panel y YCloud la busca en
+# /panel/media/{token} para reenviarla al cliente. El cache vive en
+# `app/media_publica.py` porque lo comparte el pipeline: ahí se publica el
+# comprobante para que WhatsApp pueda leerlo en la plantilla de aprobación.
 def _media_guardar(data: bytes, content_type: str) -> str:
-    token = secrets.token_urlsafe(16)
-    _MEDIA_CACHE[token] = (content_type, data)
-    while len(_MEDIA_CACHE) > _MEDIA_MAX:
-        _MEDIA_CACHE.pop(next(iter(_MEDIA_CACHE)))
-    return token
+    return media_publica.guardar(data, content_type)
 
 
 @panel_router.get("/media/{token}")
 async def serve_media(token: str) -> Response:
     """Sirve un archivo (imagen/audio) subido por el supervisor. PÚBLICA (sin
     token): YCloud lo fetchea sin auth, igual que /img. Transitorio (en memoria)."""
-    entry = _MEDIA_CACHE.get(str(token).split(".")[0])
+    entry = media_publica.obtener(token)
     if entry is None:
         raise HTTPException(status_code=404, detail="media no encontrada")
     ctype, data = entry

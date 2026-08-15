@@ -38,7 +38,7 @@ from app.redis_client import conversation_lock
 from app.repeticion import contar_repeticion
 from app.repeticion import reset as reset_repeticion
 from app.router import respuesta_directa
-from app import score
+from app import pagos, score
 from app.session import RedisSession
 from app.settings import settings
 from app.ycloud import ycloud
@@ -497,6 +497,7 @@ async def procesar_turno(
     # el único que puede darlo por bueno.
     if ctx.es_comprobante and ctx.order_id:
         await panel_events.guardar_aprobacion(chat_id, "pendiente", ctx.order_id)
+        await _avisar_aprobacion(ctx, mensaje)
 
     # Semáforo de cierre: acá el turno está CERRADO y los efectos son definitivos
     # (order_id, líneas y la cotización los acaba de fijar _efectos/las tools). Es
@@ -516,6 +517,43 @@ async def procesar_turno(
         respuesta=mensaje, order_id=ctx.order_id, agente=ctx.agente,
         escalar=bool(ctx.escalar or respuesta.escalar),
         score=puntos["score"], score_sem=puntos["sem"],
+    )
+
+
+async def _avisar_aprobacion(ctx: ConversationContext, mensaje: str) -> None:
+    """Le manda al supervisor el comprobante + el detalle del pedido, con botones.
+
+    Es lo único que puede convertir "estamos verificando tu pago" en el número de
+    pedido, así que si la plantilla no sale (Meta todavía no la aprobó, por ejemplo)
+    se cae al aviso de siempre: el supervisor tiene que enterarse igual, y el pago
+    queda pendiente en el panel, que es la otra puerta para aprobarlo.
+    """
+    es_envio = str(ctx.pedido_modalidad).lower().startswith("env")
+    ok = await pagos.avisar_supervisor(
+        chat_id=ctx.chat_id,
+        emisor=ctx.emisor,
+        order_id=int(ctx.order_id or 0),
+        modalidad=ctx.pedido_modalidad,
+        cliente=ctx.user_name or "Sin nombre",
+        telefono=ctx.telefono or ctx.chat_id,
+        direccion=ctx.direccion_entrega,
+        lineas=ctx.lineas,
+        envio=ctx.cfg.precio_envio_num if es_envio else 0.0,
+        imagen_url=ctx.imagen_url,
+    )
+    if ok:
+        return
+    # A esta altura `_efectos` ya encoló la revisión del turno, así que ésta va sola:
+    # un pago que nadie puede aprobar tiene que quedar en la cola igual.
+    await encolar_revision(
+        ctx.chat_id, ["aviso_aprobacion_no_enviado"],
+        f"pedido {ctx.order_id} esperando aprobación", ctx.order_id, ctx.user_name,
+    )
+    await ycloud.enviar_plantilla(
+        settings.admin_phone,
+        ctx.emisor,
+        settings.template_pedido_creado,
+        [ctx.user_name or "Sin nombre", ctx.telefono or ctx.chat_id, mensaje],
     )
 
 
@@ -683,12 +721,17 @@ async def _efectos(
             "order", ctx.chat_id, user_name=ctx.user_name, emisor=ctx.emisor,
             detalle=f"Pedido {ctx.order_id} creado", order_id=ctx.order_id,
         )
-        await ycloud.enviar_plantilla(
-            settings.admin_phone,
-            ctx.emisor,
-            settings.template_pedido_creado,
-            [ctx.user_name or "Sin nombre", ctx.telefono or ctx.chat_id, mensaje],
-        )
+        # Con comprobante el aviso al supervisor NO es este: es la plantilla de
+        # APROBACIÓN (foto del comprobante + detalle + botones), que sale al final del
+        # turno, ya con el pago marcado como pendiente. Mandar los dos sería avisarle
+        # dos veces del mismo pedido, y el de siempre no se puede aprobar.
+        if not ctx.es_comprobante:
+            await ycloud.enviar_plantilla(
+                settings.admin_phone,
+                ctx.emisor,
+                settings.template_pedido_creado,
+                [ctx.user_name or "Sin nombre", ctx.telefono or ctx.chat_id, mensaje],
+            )
         if ctx.lineas_creadas == 0:
             ctx.marcar_revision("pedido_sin_lineas")
         if ctx.imagen_url and ctx.es_comprobante:

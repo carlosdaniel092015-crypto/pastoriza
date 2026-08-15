@@ -298,6 +298,8 @@ async def crear_pedido(
     # Modalidad real del pedido: la usa el panel para saber si hay que esperar la
     # transferencia (envío) o si se paga en el mostrador (retiro, no lleva comprobante).
     c.pedido_modalidad = "envio" if m.startswith("env") else "retiro"
+    # La dirección tal como quedó en el pedido (misma nota que se guarda en Odoo).
+    c.direccion_entrega = nota.replace("ENTREGA: ", "", 1)
     log.info(
         "pedido_creado", chat_id=c.chat_id, order_id=order_id,
         modalidad=c.pedido_modalidad,
@@ -356,6 +358,12 @@ async def agregar_linea_pedido(
         },
     )
     c.lineas_creadas += 1
+    c.lineas.append({
+        "nombre": producto.nombre,
+        "cantidad": int(cantidad),
+        "precio": float(precio_unitario),
+        "total": round(cantidad * precio_unitario, 2),
+    })
     log.info(
         "linea_creada",
         chat_id=c.chat_id,

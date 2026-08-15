@@ -249,6 +249,61 @@ class YCloud:
             }
         )
 
+    async def enviar_plantilla_botones(
+        self,
+        telefono: str,
+        emisor: str,
+        nombre: str,
+        parametros: list[str],
+        imagen_url: str = "",
+        botones: list[str] | None = None,
+    ) -> bool:
+        """Plantilla con foto de cabecera y botones de respuesta rápida.
+
+        Es la que aprueba el supervisor: cabecera = comprobante, cuerpo = resumen del
+        pedido, botones = aprobar / no aprobar. Cuando toca uno, WhatsApp nos devuelve
+        su `payload` como mensaje entrante (ver `app/aprobacion.py`).
+
+        Devuelve True sólo si YCloud aceptó el envío: el que llama necesita saberlo
+        para no dar por avisado al supervisor cuando no se avisó.
+        """
+        componentes: list[dict] = []
+        if imagen_url:
+            componentes.append({
+                "type": "header",
+                "parameters": [{"type": "image", "image": {"link": imagen_url}}],
+            })
+        componentes.append({
+            "type": "body",
+            "parameters": [
+                {
+                    "type": "text",
+                    # Meta RECHAZA variables con saltos de línea o tabs.
+                    "text": re.sub(r"[\r\n\t]", " ", str(p)).strip()[:300] or "-",
+                }
+                for p in parametros
+            ],
+        })
+        for i, pay in enumerate(botones or []):
+            componentes.append({
+                "type": "button",
+                "sub_type": "quick_reply",
+                "index": str(i),
+                "parameters": [{"type": "payload", "payload": str(pay)[:128]}],
+            })
+
+        data = await self._post({
+            "from": emisor,
+            "to": telefono,
+            "type": "template",
+            "template": {
+                "name": nombre,
+                "language": {"code": settings.template_lang},
+                "components": componentes,
+            },
+        })
+        return bool(data)
+
     async def avisar_admin(self, emisor: str, texto: str) -> None:
         await self._post(
             {

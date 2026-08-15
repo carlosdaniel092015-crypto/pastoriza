@@ -23,7 +23,8 @@ from fastapi.responses import JSONResponse, Response
 from app.media import close_http as close_media_http
 from app.media import convertir_a_jpg, descargar
 
-from app import canario, version
+from app import aprobacion, canario, pagos, version
+from app.canales import canal_id
 from app.business_config import (
     canales_configurados,
     config_as_dict,
@@ -35,7 +36,12 @@ from app.business_config import (
 from app.catalogo import catalogo
 from app.estado import limpiar_revision, listar_revision, pausar_bot, reactivar_bot
 from app.logging_conf import get_logger, setup_logging
-from app.models import bloque_saliente, parse_inbound, parse_outbound_command
+from app.models import (
+    InboundMessage,
+    bloque_saliente,
+    parse_inbound,
+    parse_outbound_command,
+)
 from app.odoo import odoo
 from app.panel import agentes_custom, conocimiento, prompt_store, telegram
 from app.panel.analista import analizar_y_sugerir
@@ -263,6 +269,16 @@ async def webhook_ycloud(
         )
         return JSONResponse({"ok": True, "ignored": body.get("type", "?")})
 
+    # El SUPERVISOR contestando la plantilla de aprobación del pago. Se atiende antes
+    # que la venta: es una orden de operación, no una conversación con un cliente.
+    # Sólo se intercepta si el mensaje ES una respuesta de aprobación (ver
+    # `aprobacion.parsear_respuesta`); cualquier otra cosa que escriba sigue su curso.
+    if _es_supervisor(msg.chat_id) and aprobacion.parsear_respuesta(
+        msg.boton_payload or msg.content
+    ):
+        background.add_task(_aprobar_desde_whatsapp, msg)
+        return JSONResponse({"ok": True, "aprobacion": True})
+
     log.info(
         "entrante",
         chat_id=msg.chat_id,
@@ -272,6 +288,46 @@ async def webhook_ycloud(
     )
     background.add_task(manejar_entrante, msg)
     return JSONResponse({"ok": True})
+
+
+def _es_supervisor(numero: str) -> bool:
+    """Compara por los últimos 10 dígitos: el mismo número llega con y sin +1."""
+    admin = canal_id(settings.admin_phone)
+    return bool(admin) and canal_id(numero) == admin
+
+
+async def _aprobar_desde_whatsapp(msg: InboundMessage) -> None:
+    """Aplica el botón que tocó el supervisor y le confirma qué pasó.
+
+    Le contesta SIEMPRE, incluso si falló: quien aprueba un pago tiene que saber si el
+    cliente recibió su número de pedido o si quedó esperando.
+    """
+    try:
+        res = await pagos.procesar_respuesta_supervisor(
+            msg.boton_payload or msg.content
+        )
+    except Exception as exc:  # noqa: BLE001
+        log.error("aprobacion_whatsapp_fallo", error=str(exc), exc_info=exc)
+        res = {"ok": False, "error": "error interno"}
+    if res is None:
+        return
+
+    pedido = res.get("order_id") or "?"
+    if not res.get("ok"):
+        aviso = f"No pude procesar el pedido {pedido}: {res.get('error', 'error')}"
+    elif res.get("accion") == aprobacion.ACCION_APROBAR:
+        aviso = (
+            f"Listo: pedido {pedido} APROBADO. Ya le avisé al cliente con su número."
+            if not res.get("ya_estaba")
+            else f"El pedido {pedido} ya estaba aprobado."
+        )
+    else:
+        aviso = (
+            f"Pedido {pedido} marcado como NO aprobado. Al cliente no se le dijo nada: "
+            "escribile vos con el motivo."
+        )
+    with contextlib.suppress(Exception):
+        await ycloud.avisar_admin(msg.instance_from or settings.ycloud_from, aviso)
 
 
 @app.post("/webhook/telegram")

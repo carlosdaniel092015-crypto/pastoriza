@@ -60,6 +60,11 @@ class ConversationContext:
     # Modalidad con la que se CREÓ el pedido ("envio" | "retiro"). Manda sobre la de la
     # cotización: el cliente puede cotizar envío y terminar retirando en tienda.
     pedido_modalidad: str = ""
+    # Detalle del pedido, para el aviso que aprueba el supervisor. Lo escriben las
+    # tools con lo que REALMENTE quedó en Odoo (nombre del producto del catálogo,
+    # cantidad y precio ya corregido), no lo que el modelo haya dicho.
+    lineas: list[dict] = field(default_factory=list)
+    direccion_entrega: str = ""
 
     def marcar_revision(self, motivo: str) -> None:
         if motivo not in self.motivo_revision:
