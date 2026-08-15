@@ -66,6 +66,10 @@ class Settings(BaseSettings):
     admin_phone: str = "+18294716701"
     template_alerta_supervisor: str = "alerta_supervisor_cliente"
     template_pedido_creado: str = "notificar_pedido_creado"
+    # Plantilla con el comprobante + resumen del pedido y los botones de aprobación
+    # (ver PLANTILLA_META.md). Si Meta todavía no la aprobó, el envío falla y el
+    # sistema cae al aviso de siempre: el pedido queda igual pendiente en el panel.
+    template_aprobacion_pago: str = "aprobacion_pago"
     template_lang: str = "es_DO"
 
     # ---------- Odoo (XML-RPC) ----------

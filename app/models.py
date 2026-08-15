@@ -77,6 +77,10 @@ class InboundMessage:
     location_lng: str = ""
     location_name: str = ""
     location_address: str = ""
+    # Payload del BOTÓN de una plantilla (lo que definimos al enviarla), no su texto.
+    # Es lo que identifica qué aprueba el supervisor: el título del botón dice
+    # "Aprobar pago" y nada más; el payload trae la acción, el chat y el pedido.
+    boton_payload: str = ""
     referral: dict = field(default_factory=dict)
     instance_from: str = ""
     raw: dict = field(default_factory=dict)
@@ -136,6 +140,16 @@ def parse_inbound(body: dict) -> InboundMessage | None:
         or ""
     )
 
+    # El payload viaja con distinto nombre según de qué botón se trate (quick_reply de
+    # una plantilla vs. botón interactivo) y YCloud no normaliza: se prueban todos.
+    boton = (
+        _g(inbound, "button", "payload")
+        or _g(inbound, "button", "text")
+        or _g(inbound, "interactive", "button_reply", "id")
+        or _g(inbound, "interactive", "list_reply", "id")
+        or ""
+    )
+
     return InboundMessage(
         message_id=_g(inbound, "id"),
         chat_id=str(chat_id),
@@ -150,6 +164,7 @@ def parse_inbound(body: dict) -> InboundMessage | None:
         location_lng=str(_g(inbound, "location", "longitude")),
         location_name=_g(inbound, "location", "name"),
         location_address=_g(inbound, "location", "address"),
+        boton_payload=str(boton),
         referral=normalizar_referral(buscar_referral(body)),
         instance_from=_g(inbound, "to") or _g(outbound, "from"),
         raw=body,

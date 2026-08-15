@@ -83,6 +83,17 @@ redactó el modelo no cuenta) desde `POST /api/chats/calcular-semaforo`, una vez
 agregás hitos, agregalos a `PESOS` y NO agregues nada que castigue al mayorista (pedir la lista,
 regatear, preguntar mucho).
 
+**El pago lo aprueba una PERSONA (`app/pagos.py` + `app/aprobacion.py`, ADR-013):** el bot
+crea el pedido y adjunta el comprobante, pero al cliente le dice sólo "estamos verificando"
+(lo fuerza `_sanear`, no el prompt) y el pago queda `pendiente`. Al supervisor (`ADMIN_PHONE`)
+le llega la plantilla `aprobacion_pago` con la FOTO del comprobante + cliente, dirección,
+productos, subtotal/ITBIS/envío/total y dos botones; el número de pedido sale **sólo** de
+aprobar (botón o panel). Rechazar no le escribe nada al cliente, a propósito. La plantilla hay
+que darla de alta en Meta una vez: **`PLANTILLA_META.md`** tiene el texto exacto; si el texto
+de la plantilla cambia, rehacé los topes de `MAX_*` en `aprobacion.py` (el cuerpo entero no
+puede pasar de 1024). El comprobante se republica en `/panel/media/...`
+(`app/media_publica.py`) porque las URLs de YCloud exigen `X-API-Key` y Meta no puede bajarlas.
+
 **Panel de operación** (`app/panel/`, servido en `/panel`, protegido con `PANEL_TOKEN`): CRM en
 vivo, alertas, config, prompts por-agente, aprendizaje, kill-switch global. La UI es una SPA
 vanilla en `ui.py` (`PANEL_HTML`), **responsive** (nav lateral en escritorio → barra inferior +

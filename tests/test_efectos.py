@@ -111,3 +111,73 @@ async def test_handoff_bloqueado_si_el_determinador_no_lo_habilita(monkeypatch):
     assert "handoff" not in ctx.motivo_revision
     assert "escalada_bloqueada" in ctx.motivo_revision
     yc.enviar_plantilla.assert_not_awaited()  # el supervisor NO fue molestado
+
+
+async def test_con_comprobante_NO_manda_el_aviso_de_siempre(monkeypatch):
+    """Con comprobante el aviso al supervisor es el de APROBACIÓN (con botones).
+
+    Mandar además el de siempre le avisaría dos veces del mismo pedido, y el de
+    siempre no se puede aprobar: el supervisor tocaría donde no es.
+    """
+    yc, _pe, _enc = _mockear(monkeypatch)
+    monkeypatch.setattr(pipeline, "odoo", AsyncMock())
+    monkeypatch.setattr(pipeline, "descargar", AsyncMock(return_value=b"\x89PNG"))
+    ctx = ctx_nuevo(
+        order_id=1234, lineas_creadas=1, es_comprobante=True,
+        imagen_url="http://x/comprobante.png",
+    )
+
+    await pipeline._efectos(
+        ctx, RespuestaBot(mensaje="listo"), "listo", InboundMessage(content="pago")
+    )
+
+    yc.enviar_plantilla.assert_not_awaited()
+
+
+async def test_el_aviso_de_aprobacion_lleva_el_detalle_del_pedido(monkeypatch):
+    yc, _pe, enc = _mockear(monkeypatch)
+    avisar = AsyncMock(return_value=True)
+    monkeypatch.setattr(pipeline.pagos, "avisar_supervisor", avisar)
+    ctx = ctx_nuevo(
+        order_id=1234, es_comprobante=True, imagen_url="http://x/c.jpg",
+        pedido_modalidad="envio", direccion_entrega="Calle 5 #12, Los Alcarrizos",
+        lineas=[{"nombre": "BOTELLA 8 OZ", "cantidad": 300, "total": 3540.0}],
+    )
+
+    await pipeline._avisar_aprobacion(ctx, "estamos verificando tu pago")
+
+    kw = avisar.await_args.kwargs
+    assert kw["order_id"] == 1234
+    assert kw["imagen_url"] == "http://x/c.jpg"
+    assert kw["direccion"] == "Calle 5 #12, Los Alcarrizos"
+    assert kw["lineas"][0]["nombre"] == "BOTELLA 8 OZ"
+    assert kw["envio"] == ctx.cfg.precio_envio_num
+    yc.enviar_plantilla.assert_not_awaited()  # salió el de aprobación, no el otro
+    enc.assert_not_awaited()
+
+
+async def test_en_retiro_el_aviso_no_cobra_envio(monkeypatch):
+    _yc, _pe, _enc = _mockear(monkeypatch)
+    avisar = AsyncMock(return_value=True)
+    monkeypatch.setattr(pipeline.pagos, "avisar_supervisor", avisar)
+    ctx = ctx_nuevo(order_id=1, es_comprobante=True, pedido_modalidad="retiro")
+
+    await pipeline._avisar_aprobacion(ctx, "ok")
+
+    assert avisar.await_args.kwargs["envio"] == 0.0
+
+
+async def test_si_la_plantilla_no_sale_el_supervisor_igual_se_entera(monkeypatch):
+    """Meta puede no tener la plantilla aprobada todavía: no puede quedar en silencio
+    un pago que nadie va a poder aprobar."""
+    yc, _pe, enc = _mockear(monkeypatch)
+    monkeypatch.setattr(
+        pipeline.pagos, "avisar_supervisor", AsyncMock(return_value=False)
+    )
+    ctx = ctx_nuevo(order_id=1234, es_comprobante=True)
+
+    await pipeline._avisar_aprobacion(ctx, "estamos verificando tu pago")
+
+    yc.enviar_plantilla.assert_awaited()  # cae al aviso de siempre
+    enc.assert_awaited()  # y queda en la cola de revisión
+    assert "aviso_aprobacion_no_enviado" in enc.await_args.args[1]
