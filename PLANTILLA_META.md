@@ -28,10 +28,18 @@ Meta; es la misma plantilla).
 
 ### Encabezado (Header)
 
-- Tipo: **Imagen (Media → Image)**
+- Tipo: **Imagen (Media → Image)** ← es lo más fácil de dejar en "Ninguno", y es
+  justamente donde va el comprobante.
 - De ejemplo, para que Meta lo revise, subí **cualquier foto de un comprobante de
   transferencia** (podés tachar los datos). Esa foto es sólo la muestra: en cada envío
   real va el comprobante que mandó el cliente.
+
+**Si la plantilla queda sin encabezado** no se rompe nada, pero se pierde lo mejor:
+mandarle a una plantilla un encabezado que no declara hace que Meta rechace el mensaje
+ENTERO, así que el bot lo detecta, reintenta **sin** la foto (el aviso y los botones
+salen igual) y le manda al supervisor **el comprobante aparte**, como imagen suelta.
+Ese envío suelto depende de la ventana de 24 h de WhatsApp, así que es un parche: lo
+que corresponde es agregarle el encabezado de imagen cuando la plantilla esté activa.
 
 ### Cuerpo (Body)
 

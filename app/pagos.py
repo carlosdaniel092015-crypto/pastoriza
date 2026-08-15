@@ -82,18 +82,41 @@ async def avisar_supervisor(
             lineas=lineas,
             envio=envio,
         )
+        botones = [
+            aprobacion.payload(aprobacion.ACCION_APROBAR, chat_id, order_id),
+            aprobacion.payload(aprobacion.ACCION_RECHAZAR, chat_id, order_id),
+        ]
+
+        async def _mandar(foto_url: str) -> bool:
+            return await ycloud.enviar_plantilla_botones(
+                settings.admin_phone,
+                emisor,
+                settings.template_aprobacion_pago,
+                params,
+                imagen_url=foto_url,
+                botones=botones,
+            )
+
         foto = await _publicar_comprobante(imagen_url)
-        ok = await ycloud.enviar_plantilla_botones(
-            settings.admin_phone,
-            emisor,
-            settings.template_aprobacion_pago,
-            params,
-            imagen_url=foto,
-            botones=[
-                aprobacion.payload(aprobacion.ACCION_APROBAR, chat_id, order_id),
-                aprobacion.payload(aprobacion.ACCION_RECHAZAR, chat_id, order_id),
-            ],
-        )
+        ok = await _mandar(foto)
+
+        if not ok and foto:
+            # La plantilla puede estar dada de alta SIN encabezado de imagen. Mandarle
+            # un componente de header que la plantilla no declara hace que Meta rechace
+            # el mensaje ENTERO: el supervisor se quedaría sin aviso y sin botones por
+            # una foto. Vale más el aviso sin foto que ningún aviso, así que se
+            # reintenta sin ella y el comprobante se manda aparte.
+            log.warning(
+                "aviso_aprobacion_sin_encabezado",
+                chat_id=chat_id, order_id=order_id,
+                detalle=(
+                    "la plantilla no acepta la foto en el encabezado; se reintenta sin "
+                    "ella (ver PLANTILLA_META.md: Encabezado = Imagen)"
+                ),
+            )
+            ok = await _mandar("")
+            if ok:
+                await _mandar_comprobante_aparte(emisor, foto, order_id)
     except Exception as exc:  # noqa: BLE001
         log.error("aviso_aprobacion_fallo", chat_id=chat_id, error=str(exc))
         return False
@@ -107,6 +130,24 @@ async def avisar_supervisor(
             plantilla=settings.template_aprobacion_pago,
         )
     return ok
+
+
+async def _mandar_comprobante_aparte(emisor: str, foto: str, order_id: int) -> None:
+    """El comprobante como imagen suelta, cuando no pudo ir en la plantilla.
+
+    Best-effort: fuera de la ventana de 24 h de WhatsApp esto no sale, y está bien —
+    el aviso con los botones ya salió y la foto también está en el panel y adjunta al
+    pedido en Odoo. Nunca lanza: es un extra, no el aviso.
+    """
+    try:
+        ok = await ycloud.enviar_imagen(
+            {"to": settings.admin_phone}, emisor, foto,
+            caption=f"Comprobante del pedido {order_id}",
+        )
+    except Exception as exc:  # noqa: BLE001
+        log.warning("comprobante_aparte_fallo", order_id=order_id, error=str(exc))
+        return
+    log.info("comprobante_aparte", order_id=order_id, enviado=bool(ok))
 
 
 # ------------------------------------------------------------- acciones ---

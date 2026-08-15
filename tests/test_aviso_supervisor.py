@@ -391,3 +391,97 @@ def _futuro(valor):
         return valor
 
     return _f()
+
+
+class TestPlantillaSinEncabezadoDeImagen:
+    """Si la plantilla se dio de alta SIN encabezado, Meta rechaza el mensaje ENTERO
+    cuando le mandamos la foto: el supervisor se quedaría sin aviso y sin botones."""
+
+    @pytest.fixture
+    def espia(self, monkeypatch):
+        from app import media_publica, pagos
+        from app.settings import settings
+        from app.ycloud import ycloud
+
+        monkeypatch.setattr(settings, "public_base_url", "https://bot.test")
+        monkeypatch.setattr(
+            pagos, "descargar", lambda url, **kw: _futuro(b"\xff\xd8jpeg")
+        )
+        intentos: list[str] = []
+        imagenes: list[tuple] = []
+
+        async def _plantilla(telefono, emisor, nombre, parametros,
+                             imagen_url="", botones=None):
+            intentos.append(imagen_url)
+            return not imagen_url  # la plantilla NO acepta encabezado
+
+        async def _imagen(destino, emisor, url, caption=""):
+            imagenes.append((destino, url, caption))
+            return True
+
+        monkeypatch.setattr(ycloud, "enviar_plantilla_botones", _plantilla)
+        monkeypatch.setattr(ycloud, "enviar_imagen", _imagen)
+        media_publica._CACHE.clear()
+        return intentos, imagenes
+
+    async def _avisar(self):
+        from app import pagos
+
+        return await pagos.avisar_supervisor(
+            chat_id=CLIENTE, emisor=A, order_id=160, modalidad="envio",
+            cliente="Clarys", telefono=CLIENTE, direccion="Calle 5 #12",
+            lineas=LINEAS, envio=550, imagen_url="https://ycloud/media/abc.jpg",
+        )
+
+    async def test_reintenta_sin_foto_para_que_el_aviso_salga_igual(self, espia):
+        intentos, _ = espia
+        assert await self._avisar() is True
+        assert len(intentos) == 2
+        assert intentos[0].startswith("https://bot.test/")  # primero, con foto
+        assert intentos[1] == ""                            # después, sin ella
+
+    async def test_y_el_comprobante_le_llega_aparte(self, espia):
+        from app.settings import settings
+
+        _, imagenes = espia
+        await self._avisar()
+        assert len(imagenes) == 1
+        destino, url, caption = imagenes[0]
+        assert destino == {"to": settings.admin_phone}
+        assert url.startswith("https://bot.test/panel/media/")
+        assert "160" in caption
+
+    async def test_si_la_foto_suelta_falla_el_aviso_sigue_valiendo(
+        self, espia, monkeypatch
+    ):
+        """La ventana de 24 h puede estar cerrada: eso no invalida la aprobación."""
+        from app.ycloud import ycloud
+
+        async def _explota(*a, **kw):
+            raise RuntimeError("fuera de ventana")
+
+        monkeypatch.setattr(ycloud, "enviar_imagen", _explota)
+        assert await self._avisar() is True
+
+    async def test_si_la_plantilla_no_existe_no_se_reintenta_para_siempre(
+        self, monkeypatch
+    ):
+        """Meta no la aprobó todavía: los dos intentos fallan y se cae al plan B."""
+        from app import media_publica, pagos
+        from app.settings import settings
+        from app.ycloud import ycloud
+
+        monkeypatch.setattr(settings, "public_base_url", "https://bot.test")
+        monkeypatch.setattr(
+            pagos, "descargar", lambda url, **kw: _futuro(b"\xff\xd8jpeg")
+        )
+        media_publica._CACHE.clear()
+        intentos: list[str] = []
+
+        async def _plantilla(*a, **kw):
+            intentos.append(kw.get("imagen_url", ""))
+            return False
+
+        monkeypatch.setattr(ycloud, "enviar_plantilla_botones", _plantilla)
+        assert await self._avisar() is False
+        assert len(intentos) == 2
