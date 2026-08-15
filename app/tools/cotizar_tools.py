@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from agents import RunContextWrapper, function_tool
 
 from app.context import ConversationContext
+from app.estado import guardar_cotizacion
 from app.logging_conf import get_logger
 
 log = get_logger(__name__)
@@ -114,6 +115,9 @@ async def cotizar(
         ctx.context.cotizado_total = c.total_final
     if c.modalidad:
         ctx.context.cotizado_modalidad = c.modalidad
+    # Además se persiste: el comprobante llega en un turno POSTERIOR y hay que tener
+    # contra qué comparar el monto transferido (ver estado.guardar_cotizacion).
+    await guardar_cotizacion(ctx.context.chat_id, c.total_final)
 
     lineas = [
         "COTIZACION (para mostrar al cliente):",

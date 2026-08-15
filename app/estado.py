@@ -134,6 +134,42 @@ async def es_msg_bot(msg_id: str) -> bool:
         return True
 
 
+# Lo cotizado sobrevive al turno porque el comprobante llega DESPUÉS: cuando el cliente
+# manda la foto, la cotización ya pasó y `ConversationContext` arranca en cero. Sin esto
+# no habría contra qué comparar el monto transferido. Mismo TTL que la sesión.
+async def guardar_cotizacion(chat_id: str, total: float) -> None:
+    """Guarda el total cotizado más ALTO del chat (el que hay que cubrir)."""
+    if not chat_id or not total or total <= 0:
+        return
+    previo = await leer_cotizacion(chat_id)
+    if total <= previo:
+        return
+    await _escritura_idempotente(
+        lambda r: r.set(
+            settings.key("cotizado", chat_id),
+            f"{float(total):.2f}",
+            ex=settings.session_ttl_seconds,
+        ),
+        "guardar_cotizacion",
+        chat_id=chat_id,
+    )
+
+
+async def leer_cotizacion(chat_id: str) -> float:
+    """Total cotizado del chat. 0.0 si no hay o si Redis falla (no se bloquea a nadie
+    por no poder leer: el pago igual lo aprueba una persona que ve el comprobante)."""
+    if not chat_id:
+        return 0.0
+    try:
+        raw = await with_reconnect(lambda r: r.get(settings.key("cotizado", chat_id)))
+    except Exception:  # noqa: BLE001
+        return 0.0
+    try:
+        return float(raw) if raw else 0.0
+    except (TypeError, ValueError):
+        return 0.0
+
+
 async def tocar_ventana_24h(chat_id: str) -> None:
     await _escritura_idempotente(
         lambda r: r.set(

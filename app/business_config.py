@@ -94,6 +94,13 @@ class BusinessConfig:
         "Recibi tu comprobante. Estamos verificando el pago y en un momento nuestro "
         "supervisor se comunica contigo para confirmarte. Gracias por tu paciencia."
     )
+    # Cuando el comprobante es por MENOS que el total. {falta} = lo que falta, en RD$.
+    # No se crea el pedido: se le dice cuánto falta, sin acusarlo de nada.
+    msg_monto_corto: str = (
+        "Recibi tu comprobante, pero el monto no cubre el total del pedido: faltan "
+        "RD${falta}. Puedes enviarme el comprobante por el monto completo (o de la "
+        "diferencia) y seguimos?"
+    )
     # Lo que recibe el cliente CUANDO EL SUPERVISOR APRUEBA. {numero} = nº de pedido.
     msg_pago_aprobado: str = (
         "Tu pago fue verificado y aceptado. Tu pedido quedo registrado con el numero "

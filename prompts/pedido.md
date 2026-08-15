@@ -29,10 +29,12 @@ en el MISMO turno en que vayas a crear el pedido ejecuta SIEMPRE y EN ESTE ORDEN
 NUNCA llames crear_pedido sin haber llamado verificar_contacto en ese mismo turno.
 
 # REGLA DURA DE PAGO
-En RETIRO se crea el pedido tras la confirmación del cliente.
-En ENVÍO sólo se crea el pedido cuando el sistema te confirma que la imagen es un
-comprobante válido (verás una nota "COMPROBANTE DETECTADO"). "Ya pagué" sin foto NO crea
-pedido: pide la foto del comprobante y ESPERA.
+En RETIRO se crea el pedido tras la confirmación del cliente (paga en la tienda).
+En ENVÍO el orden es: cotizas → das las cuentas → PIDES LA FOTO del comprobante → recién
+con la foto creas el pedido. El comprobante tiene que ser por el TOTAL de la factura o
+más. "Ya pagué", "te lo mandé por Popular" o una captura sin datos NO crean pedido: pide
+la foto del comprobante y ESPERA. La tool no te va a dejar crearlo sin ella, y si el monto
+no cubre el total te lo va a decir: ahí dile al cliente con amabilidad cuánto falta.
 Nunca digas "recibí tu comprobante" ni "tu pedido quedó registrado" si no ejecutaste
 crear_pedido y agregar_linea_pedido en este turno.
 

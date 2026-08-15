@@ -151,8 +151,21 @@ escribió un humano desde YCloud → pausa 30m ese chat. Fail-safe: ante duda, n
 cotizaciones; solo yo, el supervisor del 6701, apruebo"*. Antes el bot, al ver un comprobante,
 le confirmaba al cliente que su pedido quedaba "registrado exitosamente" — o sea, daba por
 buena una transferencia que nadie miró.
-**Decisión:** el comprobante sigue creando el pedido y adjuntándose en Odoo (eso es trabajo
-adelantado, no una confirmación), pero:
+**Decisión:** en **ENVÍO no hay pedido sin comprobante**, y el comprobante tiene que cubrir el
+total cotizado o más; recién con eso se crea el pedido y se adjunta en Odoo (trabajo adelantado,
+no una confirmación). En **RETIRO no se pide comprobante**: se paga en el mostrador. Además:
+
+- Las dos condiciones se validan en `tools/odoo_tools.crear_pedido`, no en el prompt (ADR-006):
+  el modelo ya llegó a "confirmar" pagos que nadie mandó. Sin comprobante la tool **no crea
+  nada** y le dice al modelo que pida la foto.
+- El monto se lee de lo que la visión sacó del comprobante (`app/comprobante.py`, puro) y se
+  compara contra lo cotizado, que se persiste porque la cotización ocurrió en un turno anterior
+  (`estado.guardar_cotizacion`). **Sólo se leen números marcados como dinero** — un número de
+  referencia leído como monto daría por cubierto un pago que no lo está.
+- Si el monto no alcanza, no se crea el pedido y el cliente recibe **cuánto falta**, con el
+  monto exacto puesto por el código (`cfg.msg_monto_corto`, editable por canal). Si el monto
+  **no se puede leer**, no se bloquea: lo aprueba igual una persona que ve la foto, y un falso
+  "no coincide" le diría a alguien que pagó bien que no pagó.
 
 - La respuesta al cliente la fija el CÓDIGO, no el modelo: `_sanear` reemplaza lo que haya
   redactado por `cfg.msg_comprobante` ("estamos verificando tu pago"). El prompt también lo

@@ -258,7 +258,7 @@ async def _fallback_error(msg: InboundMessage) -> None:
 
 
 # ------------------------------------------------------------ combinado ---
-async def _combinar(msgs: list[InboundMessage]) -> tuple[str, str, str, bool]:
+async def _combinar(msgs: list[InboundMessage]) -> tuple[str, str, str, bool, str]:
     """Funde la ráfaga en un solo input. Devuelve (texto, tipo, imagen_url, es_comprobante).
 
     Port de `Reconstruir Input Combinado2` + `Switch type2` + análisis de media.
@@ -291,6 +291,7 @@ async def _combinar(msgs: list[InboundMessage]) -> tuple[str, str, str, bool]:
 
     imagen_url = ""
     es_comprobante = False
+    descripcion = ""
     if imagenes:
         imagen_url = imagenes[0].media_url
         descripcion, es_comprobante = await analizar_imagen(imagen_url)
@@ -326,11 +327,11 @@ async def _combinar(msgs: list[InboundMessage]) -> tuple[str, str, str, bool]:
         # el mensaje robótico. Solo si hay algo realmente no procesable (video, doc…).
         harmless = {"sticker", "reaction"}
         if all(m.content_type in harmless for m in otros):
-            return ("", "liviano", "", False)
-        return ("", "no_soportado", "", False)
+            return ("", "liviano", "", False, "")
+        return ("", "no_soportado", "", False, "")
 
     tipo = "image" if imagenes else ("audio" if audios else "text")
-    return (texto, tipo, imagen_url, es_comprobante)
+    return (texto, tipo, imagen_url, es_comprobante, descripcion)
 
 
 # -------------------------------------------------------------- el turno ---
@@ -353,7 +354,7 @@ async def procesar_turno(
     # mínimos pueden ser distintos en cada número. Sin canal propio hereda la común.
     cfg = await load_config(emisor)
 
-    texto, tipo, imagen_url, es_comprobante = await _combinar(msgs)
+    texto, tipo, imagen_url, es_comprobante, desc_imagen = await _combinar(msgs)
 
     if tipo == "no_soportado":
         await ycloud.enviar_texto(destino, emisor, MSG_TIPO_NO_SOPORTADO, False)
@@ -383,6 +384,9 @@ async def procesar_turno(
         ad_producto_nombre=(ad_producto or {}).get("nombre", ""),
         imagen_url=imagen_url,
         es_comprobante=es_comprobante,
+        # Lo que la visión leyó del comprobante (banco, monto, referencia): de ahí
+        # sale el monto que `crear_pedido` compara contra lo cotizado.
+        comprobante_texto=desc_imagen if es_comprobante else "",
     )
     if ad_id:
         log.info(
@@ -657,9 +661,22 @@ def _sanear(mensaje: str, ctx: ConversationContext) -> str:
        el número la manda el panel cuando el supervisor aprueba. Se reemplaza el
        texto entero a propósito: es una regla del negocio, no una sugerencia al
        modelo, y acá no se negocia con lo que el modelo haya redactado.
-    2. Sin pedido real, no se deja pasar una confirmación de pedido.
+    2. Si el comprobante no cubre el total, se le dice el monto EXACTO que falta.
+    3. Sin pedido real, no se deja pasar una confirmación de pedido.
     """
     mensaje = (mensaje or "").strip()
+    if ctx.comprobante_faltante > 0:
+        # No hay pedido (la tool lo bloqueó). Lo que falta es un dato de la tool, no
+        # algo que el modelo pueda redactar mal — y además su texto caería en la
+        # regla 3 ("recibí tu comprobante") y se convertiría en "mandame la foto",
+        # que es justo lo que el cliente acaba de hacer.
+        aviso = (ctx.cfg.msg_monto_corto or "").strip()
+        if aviso:
+            falta = f"{ctx.comprobante_faltante:,.2f}"
+            try:
+                return aviso.format(falta=falta)
+            except (KeyError, IndexError, ValueError):
+                return f"{aviso} (faltan RD${falta})"
     if ctx.es_comprobante and ctx.order_id:
         aviso = (ctx.cfg.msg_comprobante or "").strip()
         if aviso:

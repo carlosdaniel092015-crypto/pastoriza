@@ -83,7 +83,10 @@ redactó el modelo no cuenta) desde `POST /api/chats/calcular-semaforo`, una vez
 agregás hitos, agregalos a `PESOS` y NO agregues nada que castigue al mayorista (pedir la lista,
 regatear, preguntar mucho).
 
-**El pago lo aprueba una PERSONA (`app/pagos.py` + `app/aprobacion.py`, ADR-013):** el bot
+**El pago lo aprueba una PERSONA (`app/pagos.py` + `app/aprobacion.py`, ADR-013):** en ENVÍO
+`crear_pedido` NO crea nada sin comprobante y exige que cubra el total cotizado (lo compara
+`app/comprobante.py` contra `estado.leer_cotizacion`; si no se puede leer el monto NO se
+bloquea); en RETIRO no se pide comprobante. Con el pago en regla el bot
 crea el pedido y adjunta el comprobante, pero al cliente le dice sólo "estamos verificando"
 (lo fuerza `_sanear`, no el prompt) y el pago queda `pendiente`. Al supervisor (`ADMIN_PHONE`)
 le llega la plantilla `aprobacion_pago` con la FOTO del comprobante + cliente, dirección,
