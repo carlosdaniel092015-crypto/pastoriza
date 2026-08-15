@@ -168,6 +168,11 @@ PANEL_HTML = r"""<!doctype html>
   .hito{font-size:9.5px;font-family:var(--mono);color:var(--mut);border:1px solid var(--line);
     border-radius:3px;padding:1px 5px}
   .hito.falta{color:var(--cinta);border-color:var(--cinta)}
+  /* Pago esperando que el supervisor lo apruebe: tiene que saltar a la vista. */
+  .pagochip{font-family:var(--mono);font-size:9.5px;text-transform:uppercase;letter-spacing:.05em;
+    background:var(--cinta);color:#16150F;border-radius:3px;padding:1px 6px;font-weight:700}
+  .abtn.aprobar{border-color:#3FB950;color:#3FB950}
+  .abtn.aprobar:hover{background:rgba(63,185,80,.12)}
   .ordbtn{background:transparent;border:1px solid var(--line);color:var(--mut);border-radius:4px;
     font-size:10px;font-family:var(--mono);padding:2px 6px;cursor:pointer;margin-left:6px}
   .ordbtn.on{color:var(--senal);border-color:var(--senal)}
@@ -385,6 +390,7 @@ PANEL_HTML = r"""<!doctype html>
       <span class="stat"><b id="stChats">0</b>chats hoy</span>
       <span class="stat acc"><b id="stAsesor">0</b>con asesor</span>
       <span class="stat rev"><b id="stRev">0</b>revisar</span>
+      <span class="stat acc"><b id="stPago">0</b>por aprobar</span>
     </div>
     <span class="sp"></span>
     <span class="htime" id="htime"></span>
@@ -592,6 +598,7 @@ async function loadStats(){
   const chatsHoy=base.filter(c=>(c.ultimo_ts||0)>=t0).length||base.length;
   const asesor=base.filter(c=>c.pausado).length;
   $('#stChats').textContent=chatsHoy; $('#stAsesor').textContent=asesor;
+  $('#stPago').textContent=base.filter(c=>c.aprobacion==='pendiente').length;
   // La cola de revisión también es del canal elegido (si no, el contador del header
   // mostraría casos del otro número).
   try{ const r=await apiC('/revision?limite=200'); $('#stRev').textContent=r.total||0; }catch(e){}
@@ -770,6 +777,9 @@ function ordenarChats(lista){
   if(orden!=='cierre') return lista;
   return lista.slice().sort((a,b)=>{
     // Primero el que escribió y nadie contestó: ahí hay alguien esperando.
+    // Un pago esperando aprobación va primero: hay plata parada y un cliente esperando.
+    const apa=a.aprobacion==='pendiente'?1:0, apb=b.aprobacion==='pendiente'?1:0;
+    if(apa!==apb) return apb-apa;
     const ea=(a.ultimo_de==='cliente'&&!a.pausado)?1:0, eb=(b.ultimo_de==='cliente'&&!b.pausado)?1:0;
     if(ea!==eb) return eb-ea;
     const pa=PRIO[a.sem||'']??1, pb=PRIO[b.sem||'']??1;
@@ -780,7 +790,7 @@ function ordenarChats(lista){
 }
 function renderChats(){
   const lista=ordenarChats(chatsDelCanal());
-  const sig=JSON.stringify(lista.map(c=>[c.chat_id,c.ultimo,c.ultimo_de,c.ultimo_ts,c.pausado,c.sem,c.score]))+'|'+selChat+'|'+canalSel+'|'+degradado+'|'+orden;
+  const sig=JSON.stringify(lista.map(c=>[c.chat_id,c.ultimo,c.ultimo_de,c.ultimo_ts,c.pausado,c.sem,c.score,c.aprobacion]))+'|'+selChat+'|'+canalSel+'|'+degradado+'|'+orden;
   const ob=$('#ordbtn'); if(ob){ ob.textContent=(orden==='cierre')?'↕ por cierre':'↕ reciente'; ob.classList.toggle('on',orden==='cierre'); }
   if(sig===_chatsSig) return; _chatsSig=sig;
   $('#chcount').textContent=lista.length;
@@ -799,7 +809,8 @@ function renderChats(){
   el.innerHTML = (canalSel===SIN_CANAL ? avisoSinCanal(lista.length) : '') + lista.map(c=>{
     const nombre=c.user_name||c.chat_id;
     const dot=c.pausado?'<span class="adot" title="en control humano"></span>':'';
-    const tag=esTest(c.chat_id)?'<span class="ttag">PRUEBA</span>':'';
+    const tag=(c.aprobacion==='pendiente'?'<span class="pagochip">pago por verificar</span>':'')
+      +(esTest(c.chat_id)?'<span class="ttag">PRUEBA</span>':'');
     // Con "Todos" se muestra de qué número entró; dentro de un canal sobra.
     const cch=(!canalSel&&c.canal_nombre)?`<span class="cch" title="Entró por ${esc(c.canal_nombre)}">${esc(c.canal_nombre)}</span>`:'';
     const sem=c.sem?`<span class="sem ${c.sem}" title="${esc(tituloSem(c))}"></span>`:'';
@@ -827,6 +838,20 @@ async function asignarCanal(canal){
     await loadChats();
     showToast('order','✓ Conversaciones asignadas',(d.asignadas||0)+' ahora están en '+nombre);
   }catch(e){ alert('No se pudo asignar: '+e); } }
+async function aprobarPago(id){
+  const c=chatsCache.find(x=>x.chat_id===id)||{};
+  if(!confirm('¿Aprobar el pago del pedido '+(c.order_id||'')+'?\n\nEl bot le va a escribir al cliente confirmándole que su pago fue verificado y aceptado.'))return;
+  try{ const d=await api('/chats/'+encodeURIComponent(id)+'/aprobar-pago',{method:'POST'});
+    showToast('order','✓ Pago aprobado','Le confirmamos al cliente el pedido '+(d.order_id||''));
+    _chatsSig=''; await loadChats(); openChat(id);
+  }catch(e){ alert('No se pudo aprobar: '+e+'\n\nEl pago sigue pendiente.'); } }
+async function rechazarPago(id){
+  const motivo=prompt('¿Por qué no es válido? (queda en Revisar; NO se le escribe nada al cliente)');
+  if(motivo===null)return;
+  try{ await api('/chats/'+encodeURIComponent(id)+'/rechazar-pago',{method:'POST',body:JSON.stringify({motivo})});
+    _chatsSig=''; await loadChats(); openChat(id);
+    showToast('rev','Pago marcado como no válido','Escribile al cliente explicándole qué pasó.');
+  }catch(e){ alert('No se pudo marcar: '+e); } }
 function abrirVistaHilo(){ const c=document.querySelector('.conv'); if(c)c.classList.add('show-thread'); document.body.classList.add('thread-open'); }
 function cerrarHilo(){ const c=document.querySelector('.conv'); if(c)c.classList.remove('show-thread'); document.body.classList.remove('thread-open'); }
 async function openChat(id){
@@ -843,8 +868,12 @@ async function openChat(id){
     : '';
   $('#thead').innerHTML=`<div class="row1"><button class="backbtn" onclick="cerrarHilo()" title="Volver">‹</button><div><div class="cn">${esc(m.user_name)||esc(id)}</div><div class="cs">${esc(canal)}</div>${semHtml}</div>
     <div class="date eyebrow">Hoy · ${hoy}</div></div>
+    ${fila.aprobacion==='pendiente'?`<div class="comun" style="margin:10px 0 0;display:block">💵 <b>Pago por verificar</b> — el cliente mandó el comprobante y el pedido ${fila.order_id?'<b>#'+fila.order_id+'</b> ':''}quedó registrado. Ya se le dijo que estamos verificando; <b>cuando apruebes</b>, el bot le confirma el número.</div>`:''}
+    ${fila.aprobacion==='rechazado'?`<div class="comun" style="margin:10px 0 0;display:block">Pago marcado como NO válido. Escribile vos explicándole qué pasó.</div>`:''}
     ${m.ad_id?`<div class="adbanner">📣 Vino del anuncio de Facebook${m.ad_producto?': '+esc(m.ad_producto):(m.ad_headline?': '+esc(m.ad_headline):'')} · ID ${esc(m.ad_id)}</div>`:''}
     <div class="acts">
+      ${fila.aprobacion==='pendiente'?`<button class="abtn aprobar" onclick="aprobarPago('${id}')">✓ Aprobar pago${fila.order_id?' #'+fila.order_id:''}</button>
+      <button class="abtn" onclick="rechazarPago('${id}')">Pago no válido</button>`:''}
       <button class="abtn" onclick="toggleBot('${id}',${d.pausado})">${d.pausado?'Reactivar bot':'Pausar para este cliente'}</button>
       <button class="abtn" onclick="marcarRevision('${id}')">Marcar para revisión</button>
       <button class="abtn mut" onclick="toggleReply()">Responder</button>
@@ -1004,9 +1033,9 @@ function copiarError(id){ const e=alerts.find(x=>x.id===id); if(!e)return; const
 // pestañas existen. Si faltara del formulario, guardar la config lo borraría y los
 // nombres de los canales volverían al default.
 const GRUPOS=[{t:'Números de WhatsApp (canales)',s:'Uno por línea: número = nombre. Cada número tiene su propia pestaña arriba, con su configuración y sus conversaciones. Esta lista es común a los dos.',campos:['canales']},
-  {t:'Envío y entrega',s:'Costo, días y notas de envío.',campos:['precio_envio','dias_envio','hora_corte','nota_envio','info_envio','minimo_envio']},{t:'Pagos',s:'Formas de pago, mínimo, cuentas y comprobante.',campos:['monto_minimo','formas_pago','contra_entrega','banco1_nombre','banco1_cuenta','banco2_nombre','banco2_cuenta','titular','cedula','msg_comprobante']},{t:'Negocio',s:'Datos de la tienda.',campos:['direccion','telefono','horario_tienda','website','maps_url']},{t:'Venta por fardo (opcional)',s:'Déjalo vacío hasta confirmar cantidad por fardo y su envío mínimo.',campos:['fardo_cantidad','fardo_envio_minimo']},{t:'Mensajes del bot',s:'Notas y frases que usa el bot.',campos:['nota_botellon','nota_stock','msg_escalar']}];
-const LBL={canales:'Números y nombres',precio_envio:'Precio de envío',dias_envio:'Días de entrega',hora_corte:'Hora de corte',nota_envio:'Notas de envío',info_envio:'Info de envío',banco1_nombre:'Banco',banco1_cuenta:'Número de cuenta',banco2_nombre:'Banco 2',banco2_cuenta:'Número de cuenta 2',titular:'Titular',cedula:'RNC',msg_comprobante:'Mensaje de comprobante',direccion:'Dirección',telefono:'Teléfono',horario_tienda:'Horario',website:'Website',maps_url:'Enlace de Maps',nota_botellon:'Nota de botellón',nota_stock:'Cuando no hay stock',msg_escalar:'Cuando pasa a un asesor',monto_minimo:'Pedido mínimo (RD$)',minimo_envio:'Mínimo para envío (por tamaño)',formas_pago:'Formas de pago',contra_entrega:'¿Pago contra entrega?',fardo_cantidad:'Unidades por fardo',fardo_envio_minimo:'Envío mínimo por fardo'};
-const HINTS={canales:'Ej: 18099221092 = Tienda · 18294716701 = Mayorista. El nombre es sólo para verlo acá.',precio_envio:'En el chat: "El envío dentro del Gran Santo Domingo son RD$ …"',hora_corte:'Después de esa hora el pedido sale al día siguiente.',msg_comprobante:'Se envía justo después de dar la cuenta.',msg_escalar:'En el chat aparece antes de "Pasado a un asesor".'};
+  {t:'Envío y entrega',s:'Costo, días y notas de envío.',campos:['precio_envio','dias_envio','hora_corte','nota_envio','info_envio','minimo_envio']},{t:'Pagos',s:'Formas de pago, mínimo, cuentas y comprobante.',campos:['monto_minimo','formas_pago','contra_entrega','banco1_nombre','banco1_cuenta','banco2_nombre','banco2_cuenta','titular','cedula','msg_comprobante','msg_pago_aprobado']},{t:'Negocio',s:'Datos de la tienda.',campos:['direccion','telefono','horario_tienda','website','maps_url']},{t:'Venta por fardo (opcional)',s:'Déjalo vacío hasta confirmar cantidad por fardo y su envío mínimo.',campos:['fardo_cantidad','fardo_envio_minimo']},{t:'Mensajes del bot',s:'Notas y frases que usa el bot.',campos:['nota_botellon','nota_stock','msg_escalar']}];
+const LBL={canales:'Números y nombres',precio_envio:'Precio de envío',dias_envio:'Días de entrega',hora_corte:'Hora de corte',nota_envio:'Notas de envío',info_envio:'Info de envío',banco1_nombre:'Banco',banco1_cuenta:'Número de cuenta',banco2_nombre:'Banco 2',banco2_cuenta:'Número de cuenta 2',titular:'Titular',cedula:'RNC',msg_comprobante:'Cuando llega el comprobante',msg_pago_aprobado:'Cuando TÚ apruebas el pago',direccion:'Dirección',telefono:'Teléfono',horario_tienda:'Horario',website:'Website',maps_url:'Enlace de Maps',nota_botellon:'Nota de botellón',nota_stock:'Cuando no hay stock',msg_escalar:'Cuando pasa a un asesor',monto_minimo:'Pedido mínimo (RD$)',minimo_envio:'Mínimo para envío (por tamaño)',formas_pago:'Formas de pago',contra_entrega:'¿Pago contra entrega?',fardo_cantidad:'Unidades por fardo',fardo_envio_minimo:'Envío mínimo por fardo'};
+const HINTS={canales:'Ej: 18099221092 = Tienda · 18294716701 = Mayorista. El nombre es sólo para verlo acá.',precio_envio:'En el chat: "El envío dentro del Gran Santo Domingo son RD$ …"',hora_corte:'Después de esa hora el pedido sale al día siguiente.',msg_comprobante:'El bot NO confirma el pago: avisa que se está verificando.',msg_pago_aprobado:'Se envía cuando le das «Aprobar pago». Usá {numero} para el número de pedido.',msg_escalar:'En el chat aparece antes de "Pasado a un asesor".'};
 let cfgDirty=0, cfgPropios=[];
 async function loadCfg(){ marcarComun();
   // No pisar lo que el operador está escribiendo si la revalidación llega después.
@@ -1021,7 +1050,7 @@ function pintarCfg(d){ cfgDirty=0;
     // `esprop`: este campo ya tiene un valor PROPIO de este número (no sigue al común).
     const pr=cfgPropios.includes(k)?' esprop':'';
     if(k==='precio_envio')return `<div class="fld${pr}"><label>${LBL[k]}</label><div class="prefix"><span>RD$</span><input id="cfg_${k}" value="${v}" oninput="cfgTouch()"/></div>${hint}</div>`;
-    const long=['info_envio','msg_comprobante','msg_escalar','nota_envio','canales'].includes(k);
+    const long=['info_envio','msg_comprobante','msg_pago_aprobado','msg_escalar','nota_envio','canales'].includes(k);
     return `<div class="fld${pr}" ${long?'style="grid-column:1/-1"':''}><label>${LBL[k]||k}</label>${long?`<textarea id="cfg_${k}" style="min-height:70px" oninput="cfgTouch()">${v}</textarea>`:`<input id="cfg_${k}" value="${v}" oninput="cfgTouch()"/>`}${hint}</div>`;
   }).join('')+`</div></div>`).join('');
   // Volver a heredar la común: sólo tiene sentido dentro de un canal con valores propios.

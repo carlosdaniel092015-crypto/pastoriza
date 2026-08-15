@@ -123,29 +123,26 @@ async def tocar_chatmeta(
     score_sem: str = "",
     score_hitos: list[str] | None = None,
 ) -> None:
-    # La info del anuncio se setea en el primer mensaje (referral); en los turnos
-    # siguientes no llega, así que la preservamos leyendo la meta previa. Lo mismo
-    # con nombre/teléfono/emisor: un mensaje sin perfil no debe BORRAR lo que ya
-    # sabíamos del cliente (pasa al registrar el entrante apenas llega).
-    # OJO: este dict se rearma DE CERO más abajo, así que todo lo que no se preserve
-    # acá se pierde. El semáforo de cierre entra en la misma cuenta: quien escriba sin
-    # pasarlo (p. ej. responder desde el panel) no debe borrar los hitos del cliente.
-    if not (ad_id and user_name and telefono and emisor and score is not None):
-        prev = await leer_chatmeta(chat_id)
-        ad_id = ad_id or prev.get("ad_id", "") or ""
-        ad_headline = ad_headline or prev.get("ad_headline", "") or ""
-        ad_producto = ad_producto or prev.get("ad_producto", "") or ""
-        user_name = user_name or prev.get("user_name", "") or ""
-        telefono = telefono or prev.get("telefono", "") or ""
-        emisor = emisor or prev.get("emisor", "") or ""
-        destino = destino or prev.get("destino") or None
-        if score is None:
-            score = prev.get("score")
-            score_sem = score_sem or prev.get("score_sem", "") or ""
-            if score_hitos is None:
-                score_hitos = prev.get("score_hitos") or None
+    # SIEMPRE se lee lo previo y se MEZCLA (prev + lo nuevo). Antes el dict se rearmaba
+    # de cero y había que acordarse de preservar campo por campo: cada dato nuevo
+    # (anuncio, semáforo, aprobación del pago…) era una oportunidad de borrar en
+    # silencio algo del cliente. Mezclando, lo que no se pasa sobrevive solo.
+    prev = await leer_chatmeta(chat_id)
+    ad_id = ad_id or prev.get("ad_id", "") or ""
+    ad_headline = ad_headline or prev.get("ad_headline", "") or ""
+    ad_producto = ad_producto or prev.get("ad_producto", "") or ""
+    user_name = user_name or prev.get("user_name", "") or ""
+    telefono = telefono or prev.get("telefono", "") or ""
+    emisor = emisor or prev.get("emisor", "") or ""
+    destino = destino or prev.get("destino") or None
+    if score is None:
+        score = prev.get("score")
+        score_sem = score_sem or prev.get("score_sem", "") or ""
+        if score_hitos is None:
+            score_hitos = prev.get("score_hitos") or None
 
     meta = {
+        **prev,
         "chat_id": chat_id,
         "emisor": emisor,
         "destino": destino or {"to": chat_id},
@@ -175,6 +172,38 @@ async def tocar_chatmeta(
         await with_reconnect(_op)
     except Exception as exc:  # noqa: BLE001
         log.warning("chatmeta_no_guardado", error=str(exc))
+
+
+async def guardar_aprobacion(
+    chat_id: str, estado: str, order_id: int | None = None, motivo: str = ""
+) -> dict:
+    """Estado de aprobación del PAGO por el supervisor.
+
+    El bot nunca da un pago por bueno: cuando llega un comprobante deja el pedido
+    "pendiente" y le dice al cliente que se está verificando. Sólo una persona lo
+    aprueba, y recién ahí el cliente recibe la confirmación con el número de pedido.
+
+    estado: "pendiente" | "aprobado" | "rechazado".
+    """
+    apro = {
+        "estado": estado,
+        "order_id": order_id,
+        "motivo": motivo[:200],
+        "ts": time.time(),
+    }
+    meta = await leer_chatmeta(chat_id)
+    if order_id is None:
+        apro["order_id"] = (meta.get("aprobacion") or {}).get("order_id")
+    meta["aprobacion"] = apro
+
+    async def _op(r: Any) -> None:
+        await r.hset(CHATMETA_KEY, chat_id, json.dumps(meta, ensure_ascii=False))
+
+    try:
+        await with_reconnect(_op)
+    except Exception as exc:  # noqa: BLE001
+        log.warning("aprobacion_no_guardada", chat_id=chat_id, error=str(exc))
+    return apro
 
 
 async def guardar_score(

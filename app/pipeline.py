@@ -492,6 +492,12 @@ async def procesar_turno(
     await tocar_ventana_24h(chat_id)
     await _efectos(ctx, respuesta, mensaje, trigger)
 
+    # Pago que espera aprobación: llegó comprobante y hay pedido. El cliente ya recibió
+    # el "estamos verificando" (_sanear); ahora queda en la cola del supervisor, que es
+    # el único que puede darlo por bueno.
+    if ctx.es_comprobante and ctx.order_id:
+        await panel_events.guardar_aprobacion(chat_id, "pendiente", ctx.order_id)
+
     # Semáforo de cierre: acá el turno está CERRADO y los efectos son definitivos
     # (order_id, líneas y la cotización los acaba de fijar _efectos/las tools). Es
     # cálculo puro y viaja en el hset que ya se hace: 0 tokens, 0 Redis extra.
@@ -606,8 +612,24 @@ async def _correr_agente(
 
 
 def _sanear(mensaje: str, ctx: ConversationContext) -> str:
-    """Red de seguridad: no dejar pasar confirmaciones de pedido sin pedido real."""
+    """Red de seguridad de la SALIDA. Dos reglas duras, las dos sobre dinero.
+
+    1. Con un COMPROBANTE, el bot NUNCA da el pago por bueno: el pedido queda
+       registrado pero el cliente recibe "estamos verificando". La confirmación con
+       el número la manda el panel cuando el supervisor aprueba. Se reemplaza el
+       texto entero a propósito: es una regla del negocio, no una sugerencia al
+       modelo, y acá no se negocia con lo que el modelo haya redactado.
+    2. Sin pedido real, no se deja pasar una confirmación de pedido.
+    """
     mensaje = (mensaje or "").strip()
+    if ctx.es_comprobante and ctx.order_id:
+        aviso = (ctx.cfg.msg_comprobante or "").strip()
+        if aviso:
+            log.info(
+                "pago_pendiente_de_aprobacion",
+                chat_id=ctx.chat_id, order_id=ctx.order_id,
+            )
+            return aviso
     if not mensaje:
         return ""
     if ctx.order_id:
