@@ -327,6 +327,9 @@ async def api_chats(x_panel_token: str | None = Header(default=None)) -> dict:
             # Pedido creado sin prueba de pago: en un envío hay que esperar la
             # transferencia antes de despachar; en un retiro se paga en el mostrador.
             "falta_pago": score.falta_pago(m.get("score_hitos")),
+            # Pago esperando que el SUPERVISOR lo apruebe (el bot nunca lo da por bueno).
+            "aprobacion": (m.get("aprobacion") or {}).get("estado", ""),
+            "order_id": (m.get("aprobacion") or {}).get("order_id"),
             "canal": canal,
             "canal_nombre": (
                 "Sin canal" if canal == SIN_CANAL else nombre_canal(emisor, mapa_canales)
@@ -689,6 +692,106 @@ async def api_responder(
         ultimo=texto, ultimo_de="asesor",
     )
     return {"ok": True, "enviado": enviado, "pausado": True}
+
+
+# --------------------------------------------- aprobación del pago ---
+@panel_router.post("/api/chats/{chat_id}/aprobar-pago")
+async def api_aprobar_pago(
+    chat_id: str, x_panel_token: str | None = Header(default=None)
+) -> dict:
+    """El SUPERVISOR da el pago por bueno: recién ahí el cliente recibe la confirmación.
+
+    El bot nunca hace esto solo. Cuando llega el comprobante avisa que se está
+    verificando; el número de pedido "registrado exitosamente" sale de acá.
+
+    NO pausa el bot (a diferencia de responder a mano): este mensaje es del bot, no
+    una toma de control del chat.
+    """
+    _auth(x_panel_token)
+    meta = await events.leer_chatmeta(chat_id)
+    apro = meta.get("aprobacion") or {}
+    order_id = apro.get("order_id")
+    if not order_id:
+        raise HTTPException(
+            status_code=400,
+            detail="esta conversación no tiene un pago pendiente de aprobación",
+        )
+    if apro.get("estado") == "aprobado":
+        return {"ok": True, "ya_estaba": True, "order_id": order_id}
+
+    emisor = meta.get("emisor") or settings.ycloud_from
+    destino = meta.get("destino") or {"to": chat_id}
+    cfg = await load_config(emisor)
+    plantilla = cfg.msg_pago_aprobado or ""
+    try:
+        texto = plantilla.format(numero=order_id)
+    except (KeyError, IndexError, ValueError):
+        # Si alguien dejó una llave rara en el mensaje editable, no se rompe el envío.
+        texto = f"{plantilla} (pedido {order_id})".strip()
+
+    enviado = False
+    try:
+        enviado = await ycloud.enviar_texto(destino, emisor, texto, simular_tipeo=False)
+    except Exception as exc:  # noqa: BLE001
+        log.warning("aprobar_pago_envio_fallo", chat_id=chat_id, error=str(exc))
+    if not enviado:
+        # No se marca aprobado si el cliente no recibió nada: quedaría creyendo que
+        # sigue en verificación y nadie volvería a mirarlo.
+        log.error("aprobar_pago_no_enviado", chat_id=chat_id, order_id=order_id)
+        raise HTTPException(
+            status_code=502,
+            detail="no se pudo enviar el mensaje al cliente; el pago sigue pendiente",
+        )
+
+    await events.guardar_aprobacion(chat_id, "aprobado", order_id)
+    await RedisSession(chat_id).add_items([{"role": "assistant", "content": texto}])
+    await events.publicar(
+        "order", chat_id, emisor=emisor, user_name=meta.get("user_name", ""),
+        detalle=f"Pago APROBADO por el supervisor · pedido {order_id}",
+        order_id=order_id,
+    )
+    await events.tocar_chatmeta(
+        chat_id, emisor=emisor, destino=destino,
+        user_name=meta.get("user_name", ""), telefono=meta.get("telefono", ""),
+        ultimo=texto, ultimo_de="bot",
+    )
+    log.info("pago_aprobado", chat_id=chat_id, order_id=order_id)
+    return {"ok": True, "order_id": order_id, "enviado": True}
+
+
+@panel_router.post("/api/chats/{chat_id}/rechazar-pago")
+async def api_rechazar_pago(
+    chat_id: str, request: Request, x_panel_token: str | None = Header(default=None)
+) -> dict:
+    """Marca el pago como NO aprobado. A propósito NO le escribe nada al cliente.
+
+    Decirle a alguien que su pago no sirve es una conversación que tiene que tener una
+    persona, con el motivo real (monto distinto, comprobante ilegible, transferencia no
+    acreditada). El panel deja el chat marcado y el supervisor escribe.
+    """
+    _auth(x_panel_token)
+    try:
+        data = await request.json()
+    except Exception:  # noqa: BLE001
+        data = {}
+    motivo = str((data or {}).get("motivo", "")).strip()
+    meta = await events.leer_chatmeta(chat_id)
+    apro = meta.get("aprobacion") or {}
+    if not apro:
+        raise HTTPException(status_code=400, detail="no hay un pago pendiente")
+
+    await events.guardar_aprobacion(chat_id, "rechazado", apro.get("order_id"), motivo)
+    await encolar_revision(
+        chat_id, ["pago_rechazado"], motivo or "(sin motivo)",
+        apro.get("order_id"), meta.get("user_name", ""),
+    )
+    await events.publicar(
+        "revision", chat_id, emisor=meta.get("emisor", ""),
+        user_name=meta.get("user_name", ""), motivos=["pago_rechazado"],
+        resumen=motivo[:200] or "Pago no aprobado por el supervisor",
+    )
+    log.info("pago_rechazado", chat_id=chat_id, order_id=apro.get("order_id"))
+    return {"ok": True, "order_id": apro.get("order_id")}
 
 
 # ------------------------------------------------ respuesta con imagen ---

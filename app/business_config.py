@@ -88,8 +88,16 @@ class BusinessConfig:
     nota_botellon: str = "Los botellones NO incluyen tapa"
     nota_stock: str = "Tenemos disponibilidad para entrega inmediata."
     msg_escalar: str = "Enseguida uno de nuestros asesores se comunicara contigo."
+    # El bot NO da un pago por bueno: avisa que se está verificando. La confirmación
+    # con el número de pedido la manda el panel cuando el supervisor aprueba.
     msg_comprobante: str = (
-        "Recibi tu comprobante. Tu pedido fue registrado y esta siendo procesado."
+        "Recibi tu comprobante. Estamos verificando el pago y en un momento nuestro "
+        "supervisor se comunica contigo para confirmarte. Gracias por tu paciencia."
+    )
+    # Lo que recibe el cliente CUANDO EL SUPERVISOR APRUEBA. {numero} = nº de pedido.
+    msg_pago_aprobado: str = (
+        "Tu pago fue verificado y aceptado. Tu pedido quedo registrado con el numero "
+        "{numero}. Cualquier cosa, aqui estoy para ayudarte."
     )
     nota_envio: str = "Pago antes de las 2PM = entrega el mismo dia"
     info_envio: str = (
