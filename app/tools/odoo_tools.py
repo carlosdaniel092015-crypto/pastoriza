@@ -12,8 +12,10 @@ import re
 
 from agents import RunContextWrapper, function_tool
 
+from app import comprobante
 from app.catalogo import catalogo
 from app.context import ConversationContext
+from app.estado import leer_cotizacion
 from app.logging_conf import get_logger
 from app.odoo import odoo
 from app.settings import settings
@@ -228,9 +230,27 @@ async def actualizar_contacto(
     return f"OK: contacto {c.partner_id} actualizado ({', '.join(valores)})."
 
 
-@function_tool
-async def crear_pedido(
-    ctx: RunContextWrapper[ConversationContext],
+async def _faltante_del_comprobante(c: ConversationContext) -> float | None:
+    """Cuánto le falta al comprobante para cubrir lo cotizado (None = no bloquear).
+
+    Lo cotizado se persiste porque la cotización pasó en un turno ANTERIOR (ver
+    `estado.guardar_cotizacion`). Si no hay cotización, o no se puede leer el monto del
+    comprobante, NO se bloquea: el pago igual lo aprueba una persona que ve la foto, y
+    un falso "no coincide" le dice a un cliente que pagó bien que no pagó.
+    """
+    total = c.cotizado_total or await leer_cotizacion(c.chat_id)
+    falta = comprobante.faltante(c.comprobante_texto, total)
+    if falta:
+        log.warning(
+            "comprobante_monto_corto",
+            chat_id=c.chat_id, falta=falta, total=total,
+            leido=comprobante.monto_pagado(c.comprobante_texto),
+        )
+    return falta
+
+
+async def crear_pedido_impl(
+    c: ConversationContext,
     modalidad: str,
     provincia: str = "",
     municipio: str = "",
@@ -241,7 +261,11 @@ async def crear_pedido(
     referencia: str = "",
     ubicacion_mapa: str = "",
 ) -> str:
-    """Crea el pedido en Odoo. SÓLO tras comprobante válido (envío) o confirmación (retiro).
+    """La lógica de `crear_pedido`, sin el envoltorio del SDK.
+
+    Está separada para poder testear las REGLAS DURAS (en envío no hay pedido sin
+    comprobante, y el comprobante tiene que cubrir el total) llamándolas directo, sin
+    montar un Runner. Lo que decide si se crea un pedido merece test propio.
 
     Para ENVÍO la dirección debe venir COMPLETA y detallada (regla dura: se valida
     aquí, no en el prompt). Si el cliente compartió su ubicación por el mapa de
@@ -259,7 +283,6 @@ async def crear_pedido(
         referencia: Punto de referencia (ej. "frente al colmado X").
         ubicacion_mapa: Link de Google Maps si el cliente compartió su ubicación.
     """
-    c = ctx.context
     if not c.partner_id:
         return "ERROR: no hay contacto verificado. Llama a verificar_contacto primero."
     if c.order_id:
@@ -267,6 +290,27 @@ async def crear_pedido(
 
     m = modalidad.lower()
     if m.startswith("env"):
+        # REGLA DURA: en envío no hay pedido sin comprobante, y el comprobante tiene
+        # que cubrir el total. Va acá y no en el prompt porque un prompt es una
+        # sugerencia: el modelo ya llegó a crear pedidos "confirmando" pagos que
+        # nadie mandó. En retiro NO aplica: ahí se paga en el mostrador.
+        if not c.es_comprobante:
+            return (
+                "ERROR: para ENVÍO no se crea el pedido sin comprobante. Pídele al "
+                "cliente la FOTO del comprobante de la transferencia por el total "
+                "(o más) y crea el pedido recién cuando la mande. Si prefiere pagar "
+                "al recibir o retirar en tienda, ofrécele el retiro en tienda."
+            )
+        falta = await _faltante_del_comprobante(c)
+        if falta:
+            c.marcar_revision("comprobante_monto_corto")
+            c.comprobante_faltante = falta
+            return (
+                f"ERROR: el comprobante no cubre el total: faltan RD${falta:,.2f}. NO "
+                "se creó el pedido. Dile al cliente cuánto falta con amabilidad, por "
+                "si transfirió de menos o mandó el comprobante equivocado, y pídele "
+                "el comprobante por el monto completo."
+            )
         faltan = datos_envio_faltantes(provincia, municipio, sector, calle)
         if faltan:
             return (
@@ -304,10 +348,59 @@ async def crear_pedido(
         "pedido_creado", chat_id=c.chat_id, order_id=order_id,
         modalidad=c.pedido_modalidad,
     )
+    if c.es_comprobante:
+        # Hay pago de por medio: el número de pedido NO se le da al cliente hasta que
+        # el supervisor apruebe (ADR-013). `_sanear` lo fuerza igual, pero el modelo
+        # tiene que leer acá lo mismo o redacta algo que después se le reemplaza.
+        return (
+            f"OK: pedido creado con número {order_id} (NO se lo digas al cliente). "
+            "Ahora agrega las líneas con agregar_linea_pedido. Al cliente decile SOLO "
+            "que su pago quedó en verificación y que el supervisor le confirma en un "
+            "momento. El número de pedido se lo damos cuando el supervisor apruebe."
+        )
     return (
         f"OK: pedido creado con número {order_id}. Ahora agrega las líneas con "
         "agregar_linea_pedido. Puedes confirmarle al cliente que su pedido quedó "
         f"registrado con el número {order_id}."
+    )
+
+
+@function_tool
+async def crear_pedido(
+    ctx: RunContextWrapper[ConversationContext],
+    modalidad: str,
+    provincia: str = "",
+    municipio: str = "",
+    sector: str = "",
+    calle: str = "",
+    numero_casa: str = "",
+    tipo_lugar: str = "",
+    referencia: str = "",
+    ubicacion_mapa: str = "",
+) -> str:
+    """Crea el pedido en Odoo. SÓLO tras comprobante válido (envío) o confirmación (retiro).
+
+    En ENVÍO no se crea nada sin el comprobante de pago, y el comprobante tiene que ser
+    por el total o más: pídele la foto ANTES. En RETIRO no se pide comprobante (se paga
+    en el mostrador). La dirección de envío debe venir COMPLETA y detallada. Todo eso se
+    valida acá, no en el prompt. Si el cliente compartió su ubicación por el mapa de
+    WhatsApp, pásala en `ubicacion_mapa` (el link de Google Maps), pero igual pide los
+    datos escritos para que el mensajero no dependa solo del pin.
+
+    Args:
+        modalidad: "envio" o "retiro".
+        provincia: Provincia (ej. Santo Domingo, Santiago). Obligatoria si es envío.
+        municipio: Municipio o pueblo. Obligatorio si es envío.
+        sector: Sector o barrio. Obligatorio si es envío.
+        calle: Calle y, si aplica, número/esquina. Obligatoria si es envío.
+        numero_casa: Número de casa/edificio/apto.
+        tipo_lugar: "casa" o "negocio" (si es negocio, incluye el nombre en referencia).
+        referencia: Punto de referencia (ej. "frente al colmado X").
+        ubicacion_mapa: Link de Google Maps si el cliente compartió su ubicación.
+    """
+    return await crear_pedido_impl(
+        ctx.context, modalidad, provincia, municipio, sector, calle,
+        numero_casa, tipo_lugar, referencia, ubicacion_mapa,
     )
 
 

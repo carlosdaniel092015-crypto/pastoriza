@@ -34,6 +34,10 @@ class ConversationContext:
     # --- media del turno ---
     imagen_url: str = ""
     es_comprobante: bool = False
+    # Lo que la VISIÓN leyó del comprobante (banco, monto, referencia). No lo escribe
+    # el modelo: `crear_pedido` saca de acá el monto transferido para comprobar que
+    # cubra el total cotizado (ver app/comprobante.py).
+    comprobante_texto: str = ""
 
     # --- enrutado multi-agente (qué especialista atendió este turno) ---
     agente: str = ""
@@ -65,6 +69,10 @@ class ConversationContext:
     # cantidad y precio ya corregido), no lo que el modelo haya dicho.
     lineas: list[dict] = field(default_factory=list)
     direccion_entrega: str = ""
+    # Cuánto le faltó al comprobante para cubrir el total (0 = cubre o no se pudo leer).
+    # Lo escribe `crear_pedido` al RECHAZAR la creación, y `_sanear` lo convierte en el
+    # mensaje al cliente: el monto es un hecho, no algo que el modelo pueda redactar mal.
+    comprobante_faltante: float = 0.0
 
     def marcar_revision(self, motivo: str) -> None:
         if motivo not in self.motivo_revision:
