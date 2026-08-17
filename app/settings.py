@@ -73,7 +73,7 @@ class Settings(BaseSettings):
     # La misma plantilla para RETIRO, sin encabezado de imagen: en retiro no hay
     # comprobante, y una plantilla con encabezado de imagen EXIGE una imagen en cada
     # envío (Meta rechaza el mensaje entero si falta). Por eso son dos.
-    template_aprobacion_retiro: str = "aprobacion_retiro"
+    template_aprobacion_retiro: str = "aprobacion_retiro1"
     template_lang: str = "es_DO"
 
     # ---------- Odoo (XML-RPC) ----------
