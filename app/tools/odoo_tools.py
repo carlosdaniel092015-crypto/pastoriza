@@ -15,7 +15,7 @@ from agents import RunContextWrapper, function_tool
 from app import comprobante
 from app.catalogo import catalogo
 from app.context import ConversationContext
-from app.estado import leer_cotizacion
+from app.estado import consumir_comprobante, leer_comprobante, leer_cotizacion
 from app.logging_conf import get_logger
 from app.odoo import odoo
 from app.settings import settings
@@ -230,7 +230,9 @@ async def actualizar_contacto(
     return f"OK: contacto {c.partner_id} actualizado ({', '.join(valores)})."
 
 
-async def _faltante_del_comprobante(c: ConversationContext) -> float | None:
+async def _faltante_del_comprobante(
+    c: ConversationContext, texto: str
+) -> float | None:
     """Cuánto le falta al comprobante para cubrir lo cotizado (None = no bloquear).
 
     Lo cotizado se persiste porque la cotización pasó en un turno ANTERIOR (ver
@@ -239,12 +241,12 @@ async def _faltante_del_comprobante(c: ConversationContext) -> float | None:
     un falso "no coincide" le dice a un cliente que pagó bien que no pagó.
     """
     total = c.cotizado_total or await leer_cotizacion(c.chat_id)
-    falta = comprobante.faltante(c.comprobante_texto, total)
+    falta = comprobante.faltante(texto, total)
     if falta:
         log.warning(
             "comprobante_monto_corto",
             chat_id=c.chat_id, falta=falta, total=total,
-            leido=comprobante.monto_pagado(c.comprobante_texto),
+            leido=comprobante.monto_pagado(texto),
         )
     return falta
 
@@ -288,20 +290,28 @@ async def crear_pedido_impl(
     if c.order_id:
         return f"Ya existe un pedido creado en este turno: {c.order_id}."
 
+    # El comprobante puede haber llegado en un turno ANTERIOR (típico: manda la foto
+    # antes de dar la dirección). Si no se mirara lo guardado, el bot le pediría de
+    # nuevo la foto que ya mandó, y otra vez, para siempre.
+    guardado = {} if c.es_comprobante else await leer_comprobante(c.chat_id)
+    tiene_comprobante = bool(c.es_comprobante or guardado)
+    texto_comprobante = c.comprobante_texto or str(guardado.get("texto") or "")
+    url_comprobante = c.imagen_url if c.es_comprobante else str(guardado.get("url") or "")
+
     m = modalidad.lower()
     if m.startswith("env"):
         # REGLA DURA: en envío no hay pedido sin comprobante, y el comprobante tiene
         # que cubrir el total. Va acá y no en el prompt porque un prompt es una
         # sugerencia: el modelo ya llegó a crear pedidos "confirmando" pagos que
         # nadie mandó. En retiro NO aplica: ahí se paga en el mostrador.
-        if not c.es_comprobante:
+        if not tiene_comprobante:
             return (
                 "ERROR: para ENVÍO no se crea el pedido sin comprobante. Pídele al "
                 "cliente la FOTO del comprobante de la transferencia por el total "
                 "(o más) y crea el pedido recién cuando la mande. Si prefiere pagar "
                 "al recibir o retirar en tienda, ofrécele el retiro en tienda."
             )
-        falta = await _faltante_del_comprobante(c)
+        falta = await _faltante_del_comprobante(c, texto_comprobante)
         if falta:
             c.marcar_revision("comprobante_monto_corto")
             c.comprobante_faltante = falta
@@ -344,11 +354,20 @@ async def crear_pedido_impl(
     c.pedido_modalidad = "envio" if m.startswith("env") else "retiro"
     # La dirección tal como quedó en el pedido (misma nota que se guarda en Odoo).
     c.direccion_entrega = nota.replace("ENTREGA: ", "", 1)
+    if tiene_comprobante:
+        # Este pedido tiene un pago atrás que todavía nadie aprobó. Esto —y no
+        # `es_comprobante`— es lo que dispara el aviso al supervisor y el "estamos
+        # verificando" al cliente, así que funciona igual si la foto llegó antes.
+        c.pago_por_verificar = True
+        c.comprobante_url = url_comprobante
+        # Y se consume: un comprobante respalda UN pedido, no todos los que el
+        # cliente pida en las próximas 24 h.
+        await consumir_comprobante(c.chat_id)
     log.info(
         "pedido_creado", chat_id=c.chat_id, order_id=order_id,
-        modalidad=c.pedido_modalidad,
+        modalidad=c.pedido_modalidad, pago_por_verificar=c.pago_por_verificar,
     )
-    if c.es_comprobante:
+    if tiene_comprobante:
         # Hay pago de por medio: el número de pedido NO se le da al cliente hasta que
         # el supervisor apruebe (ADR-013). `_sanear` lo fuerza igual, pero el modelo
         # tiene que leer acá lo mismo o redacta algo que después se le reemplaza.

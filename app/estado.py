@@ -170,6 +170,54 @@ async def leer_cotizacion(chat_id: str) -> float:
         return 0.0
 
 
+# El comprobante también tiene que sobrevivir al turno. Caso real: el cliente manda la
+# foto ANTES de dar la dirección; el pedido no se puede crear todavía, y en el turno
+# siguiente —cuando por fin da la dirección— el comprobante ya no está en el contexto.
+# Sin esto el bot le vuelve a pedir la foto que acaba de mandar, y otra vez, para
+# siempre. Se CONSUME al crear el pedido para que un comprobante no respalde dos.
+async def guardar_comprobante(chat_id: str, url: str, texto: str) -> None:
+    if not chat_id or not (url or texto):
+        return
+    await _escritura_idempotente(
+        lambda r: r.set(
+            settings.key("comprobante", chat_id),
+            json.dumps({"url": url, "texto": texto, "ts": time.time()}),
+            ex=settings.session_ttl_seconds,
+        ),
+        "guardar_comprobante",
+        chat_id=chat_id,
+    )
+
+
+async def leer_comprobante(chat_id: str) -> dict:
+    """{'url','texto','ts'} del último comprobante recibido y NO usado todavía. {} si no
+    hay o si Redis falla: ante duda se pide la foto, que es el lado seguro."""
+    if not chat_id:
+        return {}
+    try:
+        raw = await with_reconnect(lambda r: r.get(settings.key("comprobante", chat_id)))
+    except Exception:  # noqa: BLE001
+        return {}
+    if not raw:
+        return {}
+    try:
+        data = json.loads(raw)
+    except json.JSONDecodeError:
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+async def consumir_comprobante(chat_id: str) -> None:
+    """Lo borra: ya respaldó un pedido y no puede respaldar otro."""
+    if not chat_id:
+        return
+    await _escritura_idempotente(
+        lambda r: r.delete(settings.key("comprobante", chat_id)),
+        "consumir_comprobante",
+        chat_id=chat_id,
+    )
+
+
 async def tocar_ventana_24h(chat_id: str) -> None:
     await _escritura_idempotente(
         lambda r: r.set(

@@ -36,7 +36,7 @@ def _ctx(**kw) -> ConversationContext:
 
 class TestElBotNoConfirmaElPago:
     def test_con_comprobante_y_pedido_avisa_que_se_esta_verificando(self):
-        ctx = _ctx(es_comprobante=True, order_id=160)
+        ctx = _ctx(es_comprobante=True, order_id=160, pago_por_verificar=True)
         salida = _sanear(
             "¡Listo! Recibí tu comprobante. Tu pedido 160 quedó registrado con éxito.",
             ctx,
@@ -48,7 +48,7 @@ class TestElBotNoConfirmaElPago:
         assert "registrado" not in salida.lower()
 
     def test_el_mensaje_es_editable_por_canal(self):
-        ctx = _ctx(es_comprobante=True, order_id=9,
+        ctx = _ctx(es_comprobante=True, order_id=9, pago_por_verificar=True,
                    cfg=BusinessConfig(msg_comprobante="Estamos chequeando tu pago."))
         assert _sanear("Tu pedido quedó confirmado", ctx) == "Estamos chequeando tu pago."
 
