@@ -330,6 +330,9 @@ async def api_chats(x_panel_token: str | None = Header(default=None)) -> dict:
             # Pago esperando que el SUPERVISOR lo apruebe (el bot nunca lo da por bueno).
             "aprobacion": (m.get("aprobacion") or {}).get("estado", ""),
             "order_id": (m.get("aprobacion") or {}).get("order_id"),
+            # Si hubo pago atrás o es un retiro: cambia lo que el panel puede decir
+            # ("pago por verificar" vs "pedido por aprobar") y lo que recibe el cliente.
+            "con_pago": bool((m.get("aprobacion") or {}).get("con_pago", True)),
             "canal": canal,
             "canal_nombre": (
                 "Sin canal" if canal == SIN_CANAL else nombre_canal(emisor, mapa_canales)

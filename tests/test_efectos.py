@@ -67,7 +67,7 @@ async def test_pedido_con_comprobante_lo_adjunta(monkeypatch):
     monkeypatch.setattr(pipeline, "descargar", AsyncMock(return_value=b"\x89PNG-datos"))
     ctx = ctx_nuevo(
         order_id=1234, lineas_creadas=1, es_comprobante=True,
-        pago_por_verificar=True, comprobante_url="http://x/comprobante.png",
+        espera_aprobacion=True, comprobante_url="http://x/comprobante.png",
     )
     trigger = InboundMessage(content="confirmo")
 
@@ -124,7 +124,7 @@ async def test_con_comprobante_NO_manda_el_aviso_de_siempre(monkeypatch):
     monkeypatch.setattr(pipeline, "descargar", AsyncMock(return_value=b"\x89PNG"))
     ctx = ctx_nuevo(
         order_id=1234, lineas_creadas=1, es_comprobante=True,
-        pago_por_verificar=True, comprobante_url="http://x/comprobante.png",
+        espera_aprobacion=True, comprobante_url="http://x/comprobante.png",
     )
 
     await pipeline._efectos(
@@ -139,7 +139,7 @@ async def test_el_aviso_de_aprobacion_lleva_el_detalle_del_pedido(monkeypatch):
     avisar = AsyncMock(return_value=True)
     monkeypatch.setattr(pipeline.pagos, "avisar_supervisor", avisar)
     ctx = ctx_nuevo(
-        order_id=1234, es_comprobante=True, pago_por_verificar=True,
+        order_id=1234, es_comprobante=True, espera_aprobacion=True,
         comprobante_url="http://x/c.jpg", pedido_modalidad="envio", direccion_entrega="Calle 5 #12, Los Alcarrizos",
         lineas=[{"nombre": "BOTELLA 8 OZ", "cantidad": 300, "total": 3540.0}],
     )
@@ -160,7 +160,7 @@ async def test_en_retiro_el_aviso_no_cobra_envio(monkeypatch):
     _yc, _pe, _enc = _mockear(monkeypatch)
     avisar = AsyncMock(return_value=True)
     monkeypatch.setattr(pipeline.pagos, "avisar_supervisor", avisar)
-    ctx = ctx_nuevo(order_id=1, es_comprobante=True, pago_por_verificar=True,
+    ctx = ctx_nuevo(order_id=1, es_comprobante=True, espera_aprobacion=True,
                     pedido_modalidad="retiro")
 
     await pipeline._avisar_aprobacion(ctx, "ok")
@@ -175,7 +175,7 @@ async def test_si_la_plantilla_no_sale_el_supervisor_igual_se_entera(monkeypatch
     monkeypatch.setattr(
         pipeline.pagos, "avisar_supervisor", AsyncMock(return_value=False)
     )
-    ctx = ctx_nuevo(order_id=1234, es_comprobante=True, pago_por_verificar=True)
+    ctx = ctx_nuevo(order_id=1234, es_comprobante=True, espera_aprobacion=True)
 
     await pipeline._avisar_aprobacion(ctx, "estamos verificando tu pago")
 
@@ -185,7 +185,7 @@ async def test_si_la_plantilla_no_sale_el_supervisor_igual_se_entera(monkeypatch
 
 
 async def test_el_pedido_con_comprobante_de_un_turno_anterior_tambien_avisa(monkeypatch):
-    """El aviso al supervisor cuelga de `pago_por_verificar`, no de `es_comprobante`.
+    """El aviso al supervisor cuelga de `espera_aprobacion`, no de `es_comprobante`.
 
     Si colgara de `es_comprobante`, el pedido que se crea en el turno siguiente al de
     la foto (porque faltaba la dirección) se registraría con el pago en el aire: nadie
@@ -195,7 +195,7 @@ async def test_el_pedido_con_comprobante_de_un_turno_anterior_tambien_avisa(monk
     avisar = AsyncMock(return_value=True)
     monkeypatch.setattr(pipeline.pagos, "avisar_supervisor", avisar)
     ctx = ctx_nuevo(  # es_comprobante=False: la foto llegó ANTES
-        order_id=1234, pago_por_verificar=True,
+        order_id=1234, espera_aprobacion=True,
         comprobante_url="http://x/de-ayer.jpg", pedido_modalidad="envio",
     )
 
@@ -209,7 +209,8 @@ async def test_el_pedido_con_comprobante_de_un_turno_anterior_tambien_avisa(monk
 
 
 def test_sanear_avisa_verificando_aunque_la_foto_sea_de_antes():
-    ctx = ctx_nuevo(order_id=1234, pago_por_verificar=True)
+    ctx = ctx_nuevo(order_id=1234, espera_aprobacion=True,
+                    comprobante_url="http://x/de-ayer.jpg")
     assert pipeline._sanear("Tu pedido 1234 quedo registrado", ctx) == (
         ctx.cfg.msg_comprobante
     )

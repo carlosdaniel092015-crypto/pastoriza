@@ -34,7 +34,7 @@ class ConversationContext:
     # --- media del turno ---
     imagen_url: str = ""
     # Llegó un comprobante EN ESTE TURNO. Ojo: un comprobante recibido en un turno
-    # anterior y todavía sin usar NO se ve acá — para eso está `pago_por_verificar`,
+    # anterior y todavía sin usar NO se ve acá — para eso está `espera_aprobacion`,
     # que lo escribe `crear_pedido`.
     es_comprobante: bool = False
     # Lo que la VISIÓN leyó del comprobante (banco, monto, referencia). No lo escribe
@@ -76,12 +76,12 @@ class ConversationContext:
     # Lo escribe `crear_pedido` al RECHAZAR la creación, y `_sanear` lo convierte en el
     # mensaje al cliente: el monto es un hecho, no algo que el modelo pueda redactar mal.
     comprobante_faltante: float = 0.0
-    # Este pedido tiene un pago atrás que una PERSONA todavía no aprobó. Lo escribe
-    # `crear_pedido`, y vale también cuando el comprobante llegó en un turno anterior
-    # (ver estado.leer_comprobante): es lo que dispara el aviso al supervisor y el
-    # "estamos verificando" al cliente, no `es_comprobante`, que es sólo de este turno.
-    pago_por_verificar: bool = False
-    comprobante_url: str = ""  # el comprobante que respalda el pedido
+    # Este pedido lo tiene que aprobar una PERSONA antes de que el cliente reciba su
+    # número. Lo escribe `crear_pedido` SIEMPRE (envío con pago o retiro sin pago) y es
+    # lo que dispara el aviso al supervisor y el "en revisión" al cliente — no
+    # `es_comprobante`, que es sólo de este turno.
+    espera_aprobacion: bool = False
+    comprobante_url: str = ""  # el comprobante que respalda el pedido (vacío en retiro)
 
     def marcar_revision(self, motivo: str) -> None:
         if motivo not in self.motivo_revision:

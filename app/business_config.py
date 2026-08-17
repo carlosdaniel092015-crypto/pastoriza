@@ -94,6 +94,12 @@ class BusinessConfig:
         "Recibi tu comprobante. Estamos verificando el pago y en un momento nuestro "
         "supervisor se comunica contigo para confirmarte. Gracias por tu paciencia."
     )
+    # RETIRO: no hay pago que verificar, pero el pedido igual lo aprueba el supervisor,
+    # así que tampoco se le da el número todavía.
+    msg_pedido_en_revision: str = (
+        "Tu pedido quedo tomado y nuestro supervisor lo esta revisando. En un momento "
+        "te confirmo el numero y coordinamos el retiro. Gracias por tu paciencia."
+    )
     # Cuando el comprobante es por MENOS que el total. {falta} = lo que falta, en RD$.
     # No se crea el pedido: se le dice cuánto falta, sin acusarlo de nada.
     msg_monto_corto: str = (
@@ -105,6 +111,12 @@ class BusinessConfig:
     msg_pago_aprobado: str = (
         "Tu pago fue verificado y aceptado. Tu pedido quedo registrado con el numero "
         "{numero}. Cualquier cosa, aqui estoy para ayudarte."
+    )
+    # Lo mismo para RETIRO, donde no hubo pago: no se le puede decir "pago verificado"
+    # a alguien que va a pagar en la tienda. {numero} = nº de pedido.
+    msg_retiro_aprobado: str = (
+        "Tu pedido quedo confirmado con el numero {numero}. Te esperamos en la tienda y "
+        "pagas al retirar. Cualquier cosa, aqui estoy para ayudarte."
     )
     nota_envio: str = "Pago antes de las 2PM = entrega el mismo dia"
     info_envio: str = (

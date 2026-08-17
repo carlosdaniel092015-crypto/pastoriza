@@ -86,12 +86,19 @@ async def avisar_supervisor(
             aprobacion.payload(aprobacion.ACCION_APROBAR, chat_id, order_id),
             aprobacion.payload(aprobacion.ACCION_RECHAZAR, chat_id, order_id),
         ]
+        # Dos plantillas porque una con encabezado de imagen EXIGE una imagen en cada
+        # envío: en retiro no hay comprobante, así que va la que no tiene encabezado.
+        # Ver PLANTILLA_META.md.
+        plantilla = (
+            settings.template_aprobacion_pago if imagen_url
+            else settings.template_aprobacion_retiro
+        )
 
         async def _mandar(foto_url: str) -> bool:
             return await ycloud.enviar_plantilla_botones(
                 settings.admin_phone,
                 emisor,
-                settings.template_aprobacion_pago,
+                plantilla,
                 params,
                 imagen_url=foto_url,
                 botones=botones,
@@ -126,8 +133,7 @@ async def avisar_supervisor(
         # Lo más probable: Meta todavía no aprobó la plantilla (ver PLANTILLA_META.md).
         log.error(
             "aviso_aprobacion_rechazado",
-            chat_id=chat_id, order_id=order_id,
-            plantilla=settings.template_aprobacion_pago,
+            chat_id=chat_id, order_id=order_id, plantilla=plantilla,
         )
     return ok
 
@@ -195,7 +201,12 @@ async def aprobar(chat_id: str, via: str = "panel") -> dict:
     emisor = meta.get("emisor") or settings.ycloud_from
     destino = meta.get("destino") or {"to": chat_id}
     cfg = await load_config(emisor)
-    plantilla = cfg.msg_pago_aprobado or ""
+    # "Tu pago fue verificado y aceptado" sólo si hubo un pago: al de RETIRO se le
+    # confirma el pedido y se le recuerda que paga al retirar. Si la marca vieja no
+    # trae `con_pago` (pendientes de antes de esto), se asume que sí: era el único caso.
+    con_pago = apro.get("con_pago")
+    con_pago = True if con_pago is None else bool(con_pago)
+    plantilla = (cfg.msg_pago_aprobado if con_pago else cfg.msg_retiro_aprobado) or ""
     try:
         texto = plantilla.format(numero=order_id)
     except (KeyError, IndexError, ValueError):
@@ -222,7 +233,10 @@ async def aprobar(chat_id: str, via: str = "panel") -> dict:
     await RedisSession(chat_id).add_items([{"role": "assistant", "content": texto}])
     await events.publicar(
         "order", chat_id, emisor=emisor, user_name=meta.get("user_name", ""),
-        detalle=f"Pago APROBADO por el supervisor · pedido {order_id}",
+        detalle=(
+            f"{'Pago' if con_pago else 'Pedido'} APROBADO por el supervisor · "
+            f"pedido {order_id}"
+        ),
         order_id=order_id,
     )
     await events.tocar_chatmeta(
@@ -230,7 +244,10 @@ async def aprobar(chat_id: str, via: str = "panel") -> dict:
         user_name=meta.get("user_name", ""), telefono=meta.get("telefono", ""),
         ultimo=texto, ultimo_de="bot",
     )
-    log.info("pago_aprobado", chat_id=chat_id, order_id=order_id, via=via)
+    log.info(
+        "aprobacion_aplicada",
+        chat_id=chat_id, order_id=order_id, via=via, con_pago=con_pago,
+    )
     return {"ok": True, "order_id": order_id, "enviado": True}
 
 

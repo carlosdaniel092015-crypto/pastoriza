@@ -502,12 +502,16 @@ async def procesar_turno(
     await tocar_ventana_24h(chat_id)
     await _efectos(ctx, respuesta, mensaje, trigger)
 
-    # Pago que espera aprobación: se creó un pedido con un comprobante atrás (de este
-    # turno o de uno anterior, ver estado.leer_comprobante). El cliente ya recibió el
-    # "estamos verificando" (_sanear); ahora queda en la cola del supervisor, que es el
-    # único que puede darlo por bueno. Sale SOLO, en el mismo turno del pago.
-    if ctx.pago_por_verificar and ctx.order_id:
-        await panel_events.guardar_aprobacion(chat_id, "pendiente", ctx.order_id)
+    # Pedido que espera aprobación: TODOS. Con pago atrás en envío (el comprobante pudo
+    # llegar en un turno anterior, ver estado.leer_comprobante) y sin pago en retiro. El
+    # cliente ya recibió el "en revisión" (_sanear); ahora queda en la cola del
+    # supervisor, el único que puede darle el número. Sale SOLO, en el mismo turno.
+    if ctx.espera_aprobacion and ctx.order_id:
+        await panel_events.guardar_aprobacion(
+            chat_id, "pendiente", ctx.order_id,
+            modalidad=ctx.pedido_modalidad,
+            con_pago=bool(ctx.comprobante_url),
+        )
         await _avisar_aprobacion(ctx, mensaje)
 
     # Semáforo de cierre: acá el turno está CERRADO y los efectos son definitivos
@@ -684,12 +688,20 @@ def _sanear(mensaje: str, ctx: ConversationContext) -> str:
                 return aviso.format(falta=falta)
             except (KeyError, IndexError, ValueError):
                 return f"{aviso} (faltan RD${falta})"
-    if ctx.pago_por_verificar and ctx.order_id:
-        aviso = (ctx.cfg.msg_comprobante or "").strip()
+    if ctx.espera_aprobacion and ctx.order_id:
+        # Con pago atrás se habla del PAGO ("estamos verificando"); en retiro no hubo
+        # pago, así que decirle "verificando tu pago" a alguien que va a pagar en la
+        # tienda sería mentirle. Dos mensajes distintos, los dos editables.
+        aviso = (
+            ctx.cfg.msg_comprobante if ctx.comprobante_url
+            else ctx.cfg.msg_pedido_en_revision
+        )
+        aviso = (aviso or "").strip()
         if aviso:
             log.info(
-                "pago_pendiente_de_aprobacion",
+                "pedido_pendiente_de_aprobacion",
                 chat_id=ctx.chat_id, order_id=ctx.order_id,
+                con_pago=bool(ctx.comprobante_url),
             )
             return aviso
     if not mensaje:
@@ -749,7 +761,7 @@ async def _efectos(
         # APROBACIÓN (foto del comprobante + detalle + botones), que sale al final del
         # turno, ya con el pago marcado como pendiente. Mandar los dos sería avisarle
         # dos veces del mismo pedido, y el de siempre no se puede aprobar.
-        if not ctx.pago_por_verificar:
+        if not ctx.espera_aprobacion:
             await ycloud.enviar_plantilla(
                 settings.admin_phone,
                 ctx.emisor,
@@ -758,7 +770,7 @@ async def _efectos(
             )
         if ctx.lineas_creadas == 0:
             ctx.marcar_revision("pedido_sin_lineas")
-        if ctx.pago_por_verificar and ctx.comprobante_url:
+        if ctx.espera_aprobacion and ctx.comprobante_url:
             await _adjuntar_comprobante(ctx)
 
     # 2. Comprobante que NO terminó en pedido: eso siempre necesita ojos.

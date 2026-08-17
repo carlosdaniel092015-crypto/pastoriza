@@ -175,25 +175,35 @@ async def tocar_chatmeta(
 
 
 async def guardar_aprobacion(
-    chat_id: str, estado: str, order_id: int | None = None, motivo: str = ""
+    chat_id: str,
+    estado: str,
+    order_id: int | None = None,
+    motivo: str = "",
+    modalidad: str = "",
+    con_pago: bool | None = None,
 ) -> dict:
-    """Estado de aprobación del PAGO por el supervisor.
+    """Estado de aprobación del pedido por el supervisor.
 
-    El bot nunca da un pago por bueno: cuando llega un comprobante deja el pedido
-    "pendiente" y le dice al cliente que se está verificando. Sólo una persona lo
-    aprueba, y recién ahí el cliente recibe la confirmación con el número de pedido.
+    El bot nunca le da el número al cliente por su cuenta: deja el pedido "pendiente" y
+    avisa que se está revisando. Sólo una persona lo aprueba, y recién ahí el cliente
+    recibe la confirmación con el número.
+
+    `modalidad` y `con_pago` viajan acá porque de ellos depende QUÉ se le escribe al
+    cliente al aprobar: "tu pago fue verificado" sólo aplica si hubo un pago.
 
     estado: "pendiente" | "aprobado" | "rechazado".
     """
+    meta = await leer_chatmeta(chat_id)
+    previa = meta.get("aprobacion") or {}
     apro = {
         "estado": estado,
-        "order_id": order_id,
+        "order_id": order_id if order_id is not None else previa.get("order_id"),
         "motivo": motivo[:200],
+        # Al aprobar/rechazar no se vuelven a pasar: se conservan los de la pendiente.
+        "modalidad": modalidad or previa.get("modalidad", "") or "",
+        "con_pago": previa.get("con_pago") if con_pago is None else bool(con_pago),
         "ts": time.time(),
     }
-    meta = await leer_chatmeta(chat_id)
-    if order_id is None:
-        apro["order_id"] = (meta.get("aprobacion") or {}).get("order_id")
     meta["aprobacion"] = apro
 
     async def _op(r: Any) -> None:

@@ -34,9 +34,9 @@ _APRUEBAN = {"aprobar", "aprobado", "apruebo", "ok", "si", "sí"}
 
 # Topes de cada variable. El CUERPO ENTERO de la plantilla (texto fijo + variables)
 # no puede pasar de 1024 caracteres o WhatsApp rechaza el envío — y ahí el supervisor
-# no se entera de un pago. El texto fijo de PLANTILLA_META.md son 247 caracteres, así
-# que estos topes dejan el peor caso en ~890. Si cambiás el texto de la plantilla,
-# rehacé esta cuenta (hay un test que la vigila).
+# no se entera de un pago. El texto fijo más largo de las dos plantillas de
+# PLANTILLA_META.md son 260 caracteres, así que estos topes dejan el peor caso en ~900.
+# Si cambiás el texto de una plantilla, rehacé esta cuenta (hay un test que la vigila).
 MAX_CLIENTE = 100
 MAX_DIRECCION = 200
 MAX_PRODUCTOS = 260

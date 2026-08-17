@@ -137,9 +137,14 @@ class TestRetiroNoPideComprobante:
         assert ctx.order_id == 777
         assert ctx.pedido_modalidad == "retiro"
 
-    async def test_y_ahi_si_puede_decir_el_numero(self):
-        salida = await _crear(_ctx(), modalidad="retiro")
-        assert "777" in salida and "NO se lo digas" not in salida
+    async def test_pero_el_numero_TAMPOCO_se_le_da_todavia(self):
+        """El retiro también lo aprueba el supervisor: sin pago, pero con decisión."""
+        ctx = _ctx()
+        salida = await _crear(ctx, modalidad="retiro")
+        assert "NO se lo digas al cliente" in salida
+        assert "supervisor" in salida.lower()
+        assert ctx.espera_aprobacion is True
+        assert ctx.comprobante_url == "", "en retiro no hay comprobante"
 
 
 class TestEnvioConComprobante:
@@ -228,7 +233,8 @@ class TestLoQueRecibeElCliente:
 
     def test_con_el_pago_completo_sigue_el_aviso_de_verificacion(self):
         salida, ctx = self._sanear(
-            "Tu pedido 777 quedo registrado", order_id=777, pago_por_verificar=True
+            "Tu pedido 777 quedo registrado", order_id=777, espera_aprobacion=True,
+            comprobante_url="http://x/c.jpg",
         )
         assert salida == ctx.cfg.msg_comprobante
         assert "777" not in salida
@@ -267,10 +273,10 @@ class TestElComprobanteSobreviveAlTurno:
     async def test_y_el_pago_queda_marcado_para_que_lo_apruebe_el_supervisor(
         self, guardado
     ):
-        """Es `pago_por_verificar` —no `es_comprobante`— lo que dispara el aviso."""
+        """Es `espera_aprobacion` —no `es_comprobante`— lo que dispara el aviso."""
         ctx = _ctx()
         await _crear(ctx, **ENVIO)
-        assert ctx.pago_por_verificar is True
+        assert ctx.espera_aprobacion is True
         assert ctx.comprobante_url == "https://ycloud/c.jpg"
 
     async def test_el_monto_tambien_se_revisa_contra_el_guardado(self, guardado):

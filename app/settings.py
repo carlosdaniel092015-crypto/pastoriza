@@ -70,6 +70,10 @@ class Settings(BaseSettings):
     # (ver PLANTILLA_META.md). Si Meta todavía no la aprobó, el envío falla y el
     # sistema cae al aviso de siempre: el pedido queda igual pendiente en el panel.
     template_aprobacion_pago: str = "aprobacion_pago"
+    # La misma plantilla para RETIRO, sin encabezado de imagen: en retiro no hay
+    # comprobante, y una plantilla con encabezado de imagen EXIGE una imagen en cada
+    # envío (Meta rechaza el mensaje entero si falta). Por eso son dos.
+    template_aprobacion_retiro: str = "aprobacion_retiro"
     template_lang: str = "es_DO"
 
     # ---------- Odoo (XML-RPC) ----------
