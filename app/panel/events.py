@@ -239,6 +239,37 @@ async def guardar_score(
         return False
 
 
+async def guardar_sem_manual(chat_id: str, sem: str) -> bool:
+    """El supervisor MUEVE una conversación de columna a mano.
+
+    Se guarda aparte (`sem_manual`) y NO se toca el semáforo automático: quien opera
+    sabe cosas que el sistema no puede ver —lo llamó por teléfono, pasó por la tienda,
+    dijo que no compra— y el automático seguiría en lo suyo. Manteniendo los dos, mover
+    a mano es reversible: `sem=""` vuelve al automático sin haber perdido nada.
+
+    Nota de diseño: lo manual GANA sobre lo automático, incluso sobre "Pedido creado".
+    Es a propósito —se pidió poder moverlo a donde sea— y por eso el panel marca esas
+    conversaciones como movidas a mano, para que no parezca un cálculo del sistema.
+    """
+    meta = await leer_chatmeta(chat_id)
+    if sem:
+        meta["sem_manual"] = sem
+        meta["sem_manual_ts"] = time.time()
+    else:
+        meta.pop("sem_manual", None)
+        meta.pop("sem_manual_ts", None)
+
+    async def _op(r: Any) -> None:
+        await r.hset(CHATMETA_KEY, chat_id, json.dumps(meta, ensure_ascii=False))
+
+    try:
+        await with_reconnect(_op)
+        return True
+    except Exception as exc:  # noqa: BLE001
+        log.warning("sem_manual_no_guardado", chat_id=chat_id, error=str(exc))
+        return False
+
+
 async def leer_chatmeta(chat_id: str) -> dict:
     async def _op(r: Any) -> str | None:
         return await r.hget(CHATMETA_KEY, chat_id)

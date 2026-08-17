@@ -228,6 +228,13 @@ Restricciones, que son la decisión y no un detalle:
 - **Nunca en Odoo:** una probabilidad de compra en `res.partner` sería perfilado permanente,
   exportable y visible para todo el personal.
 
+- **La persona manda sobre el cálculo.** El supervisor puede mover una conversación a la
+  columna que quiera (`sem_manual` en el chatmeta, `POST /api/chats/{id}/semaforo`): él sabe
+  cosas que el sistema no puede ver —lo llamó, pasó por la tienda, dijo que no compra—. Lo
+  manual GANA, incluso sobre "Pedido creado", pero el automático **no se pisa** (se guarda
+  aparte), así que volver a él no perdió nada y el panel marca esas conversaciones como
+  movidas a mano para que no se lean como un cálculo del sistema.
+
 **Consecuencias:** el panel ordena a quién llamar primero (botón «↕ por cierre», con
 «esperando respuesta» arriba) y muestra el semáforo SIEMPRE con su desglose en texto, para que
 sea discutible. Costo: 0 tokens y 0 llamadas nuevas; en Redis queda en neto NEGATIVO, porque al

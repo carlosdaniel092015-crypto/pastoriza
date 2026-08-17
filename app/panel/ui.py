@@ -160,6 +160,16 @@ PANEL_HTML = r"""<!doctype html>
   .semitem .nm{font-weight:600;font-size:13px;display:flex;gap:6px;align-items:center}
   .semitem .nm .h{margin-left:auto;font-family:var(--mono);font-size:10.5px;color:var(--mut)}
   .semitem .ul{color:var(--mut);font-size:12px;margin-top:2px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  /* La tarjeta es un contenedor: el botón abre la conversación y el selector la mueve
+     de columna. Sin separarlos, elegir en el selector abría el chat encima. */
+  .semitem .semab{display:block;width:100%;background:none;border:0;padding:0;margin:0;
+    text-align:left;cursor:pointer;color:inherit;font:inherit}
+  .semsel{width:100%;margin-top:6px;background:var(--panel2);color:var(--mut);
+    border:1px solid var(--line);border-radius:5px;padding:3px 6px;font-size:10.5px;
+    font-family:var(--mono);cursor:pointer}
+  .semsel:hover{color:var(--tx);border-color:var(--senal)}
+  .semsel.chico{width:auto;margin:0 0 0 4px;display:inline-block;vertical-align:middle}
+  .hito.mano{color:var(--senal);border-color:var(--senal)}
   .badge.verde{background:#3FB950}
   /* El color también en la LISTA de conversaciones: una barra en el borde, no sólo el punto. */
   .chat.sem-verde{border-left:3px solid #3FB950} .chat.sem-amarillo{border-left:3px solid var(--cinta)}
@@ -700,9 +710,31 @@ function marcarComun(){
 const TEXTO_SEM={verde:'Cerca de cerrar',amarillo:'Interesado',gris:'Sin señales todavía',cerrado:'Pedido creado'};
 function tituloSem(c){
   let t=TEXTO_SEM[c.sem||'gris']||'Sin señales todavía';
+  if(c.sem_manual) t+=' · movido a mano'+(c.sem_auto&&c.sem_auto!==c.sem_manual?' (el cálculo dice: '+(TEXTO_SEM[c.sem_auto]||c.sem_auto)+')':'');
   if(c.falta_pago) t+=' · sin comprobante todavía';
   const h=(c.hitos||[]).join(' · ');
   return h?(t+': '+h):(t+' (todavía no hizo nada medible; no significa que no vaya a comprar)');
+}
+// Mover una conversación de columna A MANO. El cálculo del sistema no se pisa: queda
+// guardado aparte, así que «Automático» vuelve a él sin haber perdido nada.
+function selectorSem(c,cls){
+  const op=(k,t)=>`<option value="${k}"${(c.sem_manual||'')===k?' selected':''}>${t}</option>`;
+  return `<select class="semsel ${cls||''}" title="Mover esta conversación de columna"
+    onchange="moverSem('${c.chat_id}',this.value,this)" onclick="event.stopPropagation()">
+    ${op('','Automático'+(c.sem_auto?' ('+(TEXTO_SEM[c.sem_auto]||c.sem_auto)+')':''))}
+    ${COLS.map(x=>op(x.k,x.t)).join('')}</select>`;
+}
+async function moverSem(id,sem,el){
+  if(el) el.disabled=true;
+  try{
+    await apiC('/chats/'+encodeURIComponent(id)+'/semaforo',{method:'POST',body:JSON.stringify({sem:sem})});
+    const f=chatsCache.find(c=>c.chat_id===id);
+    if(f){ f.sem_manual=sem; f.sem=sem||f.sem_auto||''; }
+    _chatsSig='';                     // forzar repintado de la lista
+    renderSemaforo(); renderChats();
+    if(selChat===id) openChat(id);
+  }catch(e){ showToast('err','Semáforo','No se pudo mover: '+String(e)); }
+  finally{ if(el) el.disabled=false; }
 }
 // ---- Módulo Semáforo: las conversaciones agrupadas por color ----
 // Se arma con `chatsCache`, que el poll ya trae: no pide nada nuevo al servidor.
@@ -737,10 +769,12 @@ function renderSemaforo(){
         const nombre=c.user_name||c.chat_id;
         const hs=(c.falta_pago?'<span class="hito falta">Falta el comprobante</span>':'')
           +(c.hitos||[]).slice(0,3).map(h=>`<span class="hito">${esc(h)}</span>`).join('');
-        return `<button class="semitem ${col.k}" onclick="verConv('${c.chat_id}')" title="${esc(tituloSem(c))}">
-          <div class="nm">${esc(nombre)}${(c.score&&col.k!=='gris')?`<span class="hito">${c.score}</span>`:''}<span class="h">${fmtRel(c.ultimo_ts)}</span></div>
+        return `<div class="semitem ${col.k}" title="${esc(tituloSem(c))}">
+          <button class="semab" onclick="verConv('${c.chat_id}')">
+          <div class="nm">${esc(nombre)}${(c.score&&col.k!=='gris')?`<span class="hito">${c.score}</span>`:''}${c.sem_manual?'<span class="hito mano">✋ a mano</span>':''}<span class="h">${fmtRel(c.ultimo_ts)}</span></div>
           <div class="ul">${quienDijo(c.ultimo_de)}${esc(c.ultimo)||'—'}</div>
-          ${hs?`<div class="hitos">${hs}</div>`:''}</button>`;
+          ${hs?`<div class="hitos">${hs}</div>`:''}</button>
+          ${selectorSem(c)}</div>`;
       }).join('')+(items.length>60?`<div class="empty" style="font-size:11px">+${items.length-60} más</div>`:'')
       :'<div class="empty" style="font-size:12px">—</div>'}</div></div>`;
   }).join('');
@@ -863,7 +897,7 @@ async function openChat(id){
   const fila=chatsCache.find(c=>c.chat_id===id)||{};
   const hitos=(fila.hitos||[]).map(h=>`<span class="hito">${esc(h)}</span>`).join('');
   const semHtml=fila.sem
-    ? `<div class="cs" style="margin-top:5px"><span class="sem ${fila.sem}"></span> ${esc(TEXTO_SEM[fila.sem]||'')}${fila.score!=null?' · '+fila.score+'/100':''}${fila.falta_pago?' <span class="hito falta">Falta el comprobante</span>':''}</div>
+    ? `<div class="cs" style="margin-top:5px"><span class="sem ${fila.sem}"></span> ${esc(TEXTO_SEM[fila.sem]||'')}${fila.score!=null&&!fila.sem_manual?' · '+fila.score+'/100':''}${fila.sem_manual?' <span class="hito mano">✋ a mano</span>':''}${fila.falta_pago?' <span class="hito falta">Falta el comprobante</span>':''} ${selectorSem(fila,'chico')}</div>
        ${hitos?`<div class="hitos">${hitos}</div>`:'<div class="cs" style="font-size:11px">Todavía no hizo nada medible. No significa que no vaya a comprar.</div>'}`
     : '';
   $('#thead').innerHTML=`<div class="row1"><button class="backbtn" onclick="cerrarHilo()" title="Volver">‹</button><div><div class="cn">${esc(m.user_name)||esc(id)}</div><div class="cs">${esc(canal)}</div>${semHtml}</div>

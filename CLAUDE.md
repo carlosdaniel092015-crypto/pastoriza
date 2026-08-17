@@ -81,7 +81,8 @@ color) y lo muestra siempre con su desglose en texto. Para las conversaciones qu
 `score.reconstruir` lo deduce del historial (sólo mensajes del cliente y SALIDAS DE TOOLS: lo que
 redactó el modelo no cuenta) desde `POST /api/chats/calcular-semaforo`, una vez por chat. Si
 agregás hitos, agregalos a `PESOS` y NO agregues nada que castigue al mayorista (pedir la lista,
-regatear, preguntar mucho).
+regatear, preguntar mucho). El supervisor puede **moverlo a mano** (`sem_manual`: gana sobre el
+cálculo sin pisarlo; vacío vuelve al automático).
 
 **El pago lo aprueba una PERSONA (`app/pagos.py` + `app/aprobacion.py`, ADR-013):** en ENVÍO
 `crear_pedido` NO crea nada sin comprobante y exige que cubra el total cotizado (lo compara

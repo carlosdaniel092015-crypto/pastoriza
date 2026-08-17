@@ -322,7 +322,12 @@ async def api_chats(x_panel_token: str | None = Header(default=None)) -> dict:
             # Semáforo de cierre: ya viene calculado en el chatmeta (0 costo acá).
             # `sem` vacío = todavía no se le calculó nada: NO es "frío", es sin datos.
             "score": m.get("score"),
-            "sem": m.get("score_sem", "") or "",
+            # Lo que el supervisor movió A MANO gana sobre el cálculo: él sabe cosas que
+            # el sistema no puede ver (lo llamó, pasó por la tienda, dijo que no compra).
+            # El automático se conserva aparte para poder volver a él.
+            "sem": m.get("sem_manual") or m.get("score_sem", "") or "",
+            "sem_auto": m.get("score_sem", "") or "",
+            "sem_manual": m.get("sem_manual", "") or "",
             "hitos": score.etiquetas(m.get("score_hitos")),
             # Pedido creado sin prueba de pago: en un envío hay que esperar la
             # transferencia antes de despachar; en un retiro se paga en el mostrador.
@@ -418,6 +423,32 @@ async def api_asignar_canal(
         detalle=f"{len(huerfanos)} conversación(es) sin canal asignadas a {nombre_canal(c)}",
     )
     return {"ok": True, "asignadas": len(huerfanos), "canal": c}
+
+
+@panel_router.post("/api/chats/{chat_id}/semaforo")
+async def api_mover_semaforo(
+    chat_id: str, request: Request, x_panel_token: str | None = Header(default=None)
+) -> dict:
+    """Mueve una conversación de columna A MANO. Body: {"sem": "verde"|""|...}.
+
+    `sem` vacío = volver al automático. El cálculo del sistema NO se pisa nunca (se
+    guarda aparte), así que esto es reversible y no borra nada.
+    """
+    _auth(x_panel_token)
+    try:
+        data = await request.json()
+    except Exception:  # noqa: BLE001
+        data = {}
+    sem = str((data or {}).get("sem", "")).strip().lower()
+    if sem and sem not in score.PRIORIDAD:
+        raise HTTPException(
+            status_code=400,
+            detail=f"sem debe ser uno de {sorted(score.PRIORIDAD)} o vacío (automático)",
+        )
+    if not await events.guardar_sem_manual(chat_id, sem):
+        raise HTTPException(status_code=502, detail="no se pudo guardar (Redis)")
+    log.info("semaforo_movido_a_mano", chat_id=chat_id, sem=sem or "auto")
+    return {"ok": True, "sem": sem}
 
 
 @panel_router.post("/api/chats/calcular-semaforo")
