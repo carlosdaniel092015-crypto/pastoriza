@@ -93,7 +93,7 @@ le llega una plantilla con cliente, dirección, productos, subtotal/ITBIS/envío
 botones; el número de pedido sale **sólo** de aprobar (botón o panel). Rechazar no le escribe
 nada al cliente, a propósito. **TODO pedido espera aprobación** (`ctx.espera_aprobacion`),
 también el de RETIRO, que no lleva comprobante pero sí decisión — y por eso son DOS plantillas:
-`aprobacion_pago` (cabecera de imagen, envío) y `aprobacion_retiro` (sin cabecera), porque una
+`aprobacion_pago` (cabecera de imagen, envío) y `aprobacion_retiro1` (sin cabecera), porque una
 plantilla con cabecera de imagen EXIGE imagen en cada envío. Lo que se le dice al cliente nunca
 habla de un pago que no existió (4 mensajes editables; la marca guarda `con_pago`). Hay que dar
 de alta las plantillas en Meta una vez: **`PLANTILLA_META.md`** tiene el texto exacto; si ese

@@ -7,7 +7,7 @@ panel. Para eso hacen falta **DOS plantillas**, porque los dos casos no son igua
 | Plantilla | Cuándo | Encabezado |
 |---|---|---|
 | **`aprobacion_pago`** | ENVÍO: el cliente transfirió y mandó el comprobante | **Imagen** (el comprobante) |
-| **`aprobacion_retiro`** | RETIRO en tienda: paga al retirar, no hay comprobante | **Ninguno** |
+| **`aprobacion_retiro1`** | RETIRO en tienda: paga al retirar, no hay comprobante | **Ninguno** |
 
 **¿Por qué dos y no una?** Porque una plantilla con encabezado de imagen **exige** una
 imagen en cada envío: si se manda sin foto, Meta rechaza el mensaje entero y el
@@ -100,9 +100,10 @@ sistema manda el "aprobar" en el botón 1 y el "rechazar" en el botón 2):
 | `{{8}}` | `550.00` |
 | `{{9}}` | `5,860.00` |
 
-## 3b. Datos de la plantilla `aprobacion_retiro` (RETIRO, sin comprobante)
+## 3b. Datos de la plantilla `aprobacion_retiro1` (RETIRO, sin comprobante)
 
-Es la misma, con tres diferencias. **Nombre:** `aprobacion_retiro`. Categoría, idioma,
+Es la misma, con tres diferencias. **Nombre:** `aprobacion_retiro1` (con el `1`
+al final: así se dio de alta en Meta, y el bot la busca con ese nombre exacto). Categoría, idioma,
 variables de ejemplo y pie: **idénticos** a la de arriba.
 
 - **Encabezado: Ninguno.** Acá sí va en Ninguno, y es a propósito: no hay comprobante.
@@ -151,7 +152,7 @@ idioma. Lo más simple es crear ésta con el mismo idioma que ya tienen las otra
 
 ## 5. Después de que Meta las apruebe
 
-No hay que tocar nada: los nombres `aprobacion_pago` y `aprobacion_retiro` ya están
+No hay que tocar nada: los nombres `aprobacion_pago` y `aprobacion_retiro1` ya están
 configurados. Si les pusiste otros, ponelos en el `.env`:
 
 ```
@@ -186,7 +187,7 @@ plantilla sale igual pero **sin la foto**.
 1. El cliente confirma → el bot crea el pedido en Odoo, **sin pedir comprobante**, y le
    dice que quedó **tomado y en revisión** (*Retiro: cuando toma el pedido*). Tampoco le
    da el número.
-2. Al 6701 le llega **`aprobacion_retiro`**: mismo detalle, mismos botones, sin foto.
+2. Al 6701 le llega **`aprobacion_retiro1`**: mismo detalle, mismos botones, sin foto.
 3. **Aprobar pedido** → el cliente recibe el **número** y que lo esperan en la tienda,
    donde paga al retirar (*Cuando TÚ apruebas un retiro*). Acá no se le dice "pago
    verificado", porque todavía no pagó.

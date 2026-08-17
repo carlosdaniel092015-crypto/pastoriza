@@ -179,7 +179,7 @@ no una confirmación). En **RETIRO no se pide comprobante**: se paga en el mostr
 - Al supervisor le llega una **plantilla de WhatsApp** (ver `PLANTILLA_META.md`) con el
   cliente y su dirección, los productos con cantidades, subtotal/ITBIS/envío/total y dos
   botones. Son **DOS plantillas**: `aprobacion_pago` con la **foto del comprobante** en la
-  cabecera para envío, y `aprobacion_retiro` sin cabecera para retiro. No es duplicación
+  cabecera para envío, y `aprobacion_retiro1` sin cabecera para retiro. No es duplicación
   gratuita: una plantilla con cabecera de imagen EXIGE una imagen en cada envío (sin ella Meta
   rechaza el mensaje entero), y en retiro no hay foto.
 - **Todo** pedido espera aprobación, no sólo los que tienen pago: en retiro no hay plata que
