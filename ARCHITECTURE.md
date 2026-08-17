@@ -166,6 +166,11 @@ no una confirmación). En **RETIRO no se pide comprobante**: se paga en el mostr
   monto exacto puesto por el código (`cfg.msg_monto_corto`, editable por canal). Si el monto
   **no se puede leer**, no se bloquea: lo aprueba igual una persona que ve la foto, y un falso
   "no coincide" le diría a alguien que pagó bien que no pagó.
+- El comprobante **sobrevive al turno** (`estado.guardar_comprobante`, 24 h) porque el cliente
+  suele mandar la foto ANTES de dar la dirección: sin eso, en el turno siguiente el bot le
+  volvería a pedir la foto que acaba de mandar, en loop. Se **consume** al crear el pedido —una
+  foto respalda UN pedido— y lo que dispara el aviso al supervisor es `ctx.pago_por_verificar`
+  (lo escribe la tool), no `es_comprobante`, que es sólo de este turno.
 
 - La respuesta al cliente la fija el CÓDIGO, no el modelo: `_sanear` reemplaza lo que haya
   redactado por `cfg.msg_comprobante` ("estamos verificando tu pago"). El prompt también lo

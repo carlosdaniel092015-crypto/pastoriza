@@ -227,6 +227,70 @@ class TestLoQueRecibeElCliente:
         assert "500.00" in salida
 
     def test_con_el_pago_completo_sigue_el_aviso_de_verificacion(self):
-        salida, ctx = self._sanear("Tu pedido 777 quedo registrado", order_id=777)
+        salida, ctx = self._sanear(
+            "Tu pedido 777 quedo registrado", order_id=777, pago_por_verificar=True
+        )
         assert salida == ctx.cfg.msg_comprobante
         assert "777" not in salida
+
+
+class TestElComprobanteSobreviveAlTurno:
+    """Caso real: manda la foto ANTES de dar la dirección.
+
+    El pedido no se puede crear todavía (falta la dirección). En el turno siguiente,
+    cuando por fin la da, el comprobante YA NO está en el contexto del turno. Sin
+    memoria, el bot le vuelve a pedir la foto que acaba de mandar — y otra vez, y otra.
+    """
+
+    @pytest.fixture
+    def guardado(self, monkeypatch):
+        estado: dict = {"comp": {"url": "https://ycloud/c.jpg", "texto": COMPROBANTE}}
+
+        async def _leer(chat_id):
+            return dict(estado["comp"])
+
+        async def _consumir(chat_id):
+            estado["comp"] = {}
+
+        monkeypatch.setattr(odoo_tools, "leer_comprobante", _leer)
+        monkeypatch.setattr(odoo_tools, "consumir_comprobante", _consumir)
+        return estado
+
+    async def test_el_pedido_se_crea_con_el_comprobante_del_turno_anterior(
+        self, guardado
+    ):
+        ctx = _ctx()  # este turno NO trae imagen
+        salida = await _crear(ctx, **ENVIO)
+        assert salida.startswith("OK"), salida
+        assert ctx.order_id == 777
+
+    async def test_y_el_pago_queda_marcado_para_que_lo_apruebe_el_supervisor(
+        self, guardado
+    ):
+        """Es `pago_por_verificar` —no `es_comprobante`— lo que dispara el aviso."""
+        ctx = _ctx()
+        await _crear(ctx, **ENVIO)
+        assert ctx.pago_por_verificar is True
+        assert ctx.comprobante_url == "https://ycloud/c.jpg"
+
+    async def test_el_monto_tambien_se_revisa_contra_el_guardado(self, guardado):
+        ctx = _ctx(cotizado_total=9000.0)
+        salida = await _crear(ctx, **ENVIO)
+        assert salida.startswith("ERROR") and "3,140.00" in salida
+        assert ctx.order_id is None
+
+    async def test_un_comprobante_respalda_UN_pedido_no_dos(self, guardado):
+        """Si no se consumiera, una foto habilitaría pedidos toda la noche."""
+        ctx1 = _ctx()
+        assert (await _crear(ctx1, **ENVIO)).startswith("OK")
+        assert guardado["comp"] == {}, "el comprobante se consumió"
+
+        ctx2 = _ctx()  # otro pedido, sin mandar nada nuevo
+        assert (await _crear(ctx2, **ENVIO)).startswith("ERROR")
+        assert ctx2.order_id is None
+
+    async def test_el_de_ESTE_turno_manda_sobre_el_guardado(self, guardado):
+        ctx = _ctx(es_comprobante=True, comprobante_texto="RD$9,999.00",
+                   imagen_url="https://ycloud/nuevo.jpg", cotizado_total=5860.0)
+        await _crear(ctx, **ENVIO)
+        assert ctx.comprobante_url == "https://ycloud/nuevo.jpg"

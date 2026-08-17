@@ -25,6 +25,7 @@ from app.estado import (
     bot_pausado,
     encolar_revision,
     es_msg_bot,
+    guardar_comprobante,
     pausar_bot,
     registrar_msg_bot,
     tocar_ventana_24h,
@@ -388,6 +389,11 @@ async def procesar_turno(
         # sale el monto que `crear_pedido` compara contra lo cotizado.
         comprobante_texto=desc_imagen if es_comprobante else "",
     )
+    if es_comprobante:
+        # Se guarda para que sobreviva al turno: el cliente suele mandar la foto ANTES
+        # de dar la dirección, y sin esto el bot le volvería a pedir el comprobante que
+        # acaba de mandar. `crear_pedido` lo consume cuando lo usa.
+        await guardar_comprobante(chat_id, imagen_url, desc_imagen)
     if ad_id:
         log.info(
             "cliente_de_anuncio",
@@ -496,10 +502,11 @@ async def procesar_turno(
     await tocar_ventana_24h(chat_id)
     await _efectos(ctx, respuesta, mensaje, trigger)
 
-    # Pago que espera aprobación: llegó comprobante y hay pedido. El cliente ya recibió
-    # el "estamos verificando" (_sanear); ahora queda en la cola del supervisor, que es
-    # el único que puede darlo por bueno.
-    if ctx.es_comprobante and ctx.order_id:
+    # Pago que espera aprobación: se creó un pedido con un comprobante atrás (de este
+    # turno o de uno anterior, ver estado.leer_comprobante). El cliente ya recibió el
+    # "estamos verificando" (_sanear); ahora queda en la cola del supervisor, que es el
+    # único que puede darlo por bueno. Sale SOLO, en el mismo turno del pago.
+    if ctx.pago_por_verificar and ctx.order_id:
         await panel_events.guardar_aprobacion(chat_id, "pendiente", ctx.order_id)
         await _avisar_aprobacion(ctx, mensaje)
 
@@ -543,7 +550,7 @@ async def _avisar_aprobacion(ctx: ConversationContext, mensaje: str) -> None:
         direccion=ctx.direccion_entrega,
         lineas=ctx.lineas,
         envio=ctx.cfg.precio_envio_num if es_envio else 0.0,
-        imagen_url=ctx.imagen_url,
+        imagen_url=ctx.comprobante_url,
     )
     if ok:
         return
@@ -677,7 +684,7 @@ def _sanear(mensaje: str, ctx: ConversationContext) -> str:
                 return aviso.format(falta=falta)
             except (KeyError, IndexError, ValueError):
                 return f"{aviso} (faltan RD${falta})"
-    if ctx.es_comprobante and ctx.order_id:
+    if ctx.pago_por_verificar and ctx.order_id:
         aviso = (ctx.cfg.msg_comprobante or "").strip()
         if aviso:
             log.info(
@@ -742,7 +749,7 @@ async def _efectos(
         # APROBACIÓN (foto del comprobante + detalle + botones), que sale al final del
         # turno, ya con el pago marcado como pendiente. Mandar los dos sería avisarle
         # dos veces del mismo pedido, y el de siempre no se puede aprobar.
-        if not ctx.es_comprobante:
+        if not ctx.pago_por_verificar:
             await ycloud.enviar_plantilla(
                 settings.admin_phone,
                 ctx.emisor,
@@ -751,7 +758,7 @@ async def _efectos(
             )
         if ctx.lineas_creadas == 0:
             ctx.marcar_revision("pedido_sin_lineas")
-        if ctx.imagen_url and ctx.es_comprobante:
+        if ctx.pago_por_verificar and ctx.comprobante_url:
             await _adjuntar_comprobante(ctx)
 
     # 2. Comprobante que NO terminó en pedido: eso siempre necesita ojos.
@@ -814,8 +821,8 @@ async def _efectos(
 
 async def _adjuntar_comprobante(ctx: ConversationContext) -> None:
     try:
-        data = await descargar(ctx.imagen_url)
-        mime = mime_de_url(ctx.imagen_url)
+        data = await descargar(ctx.comprobante_url)
+        mime = mime_de_url(ctx.comprobante_url)
         ext = "png" if mime == "image/png" else "jpg"
         await odoo.create(
             "ir.attachment",
@@ -835,7 +842,7 @@ async def _adjuntar_comprobante(ctx: ConversationContext) -> None:
         await ycloud.avisar_admin(
             ctx.emisor,
             f"No pude adjuntar el comprobante al pedido {ctx.order_id}. "
-            f"URL: {ctx.imagen_url}",
+            f"URL: {ctx.comprobante_url}",
         )
 
 
