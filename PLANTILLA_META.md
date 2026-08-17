@@ -1,13 +1,22 @@
-# Plantilla de WhatsApp: aprobación del pago
+# Plantillas de WhatsApp: aprobación del pedido
 
-Esta es la plantilla que le llega al **supervisor (+1 829 471-6701)** cada vez que un
-cliente manda un comprobante y el bot crea el pedido. Trae la **foto del comprobante**,
-el cliente con su dirección, los productos con cantidades, subtotal, ITBIS, envío y
-total, y **dos botones**: el supervisor aprueba desde ahí, sin entrar al panel.
+**Ningún** pedido le llega al cliente con su número hasta que el **supervisor
+(+1 829 471-6701)** lo aprueba, y aprueba desde WhatsApp con dos botones, sin entrar al
+panel. Para eso hacen falta **DOS plantillas**, porque los dos casos no son iguales:
 
-Hay que darla de alta **una sola vez** y esperar que Meta la apruebe (suele tardar de
-minutos a unas horas). Mientras no esté aprobada el bot no se rompe: cae al aviso de
-siempre y el pago queda pendiente en el panel (módulo de conversaciones), que es la
+| Plantilla | Cuándo | Encabezado |
+|---|---|---|
+| **`aprobacion_pago`** | ENVÍO: el cliente transfirió y mandó el comprobante | **Imagen** (el comprobante) |
+| **`aprobacion_retiro`** | RETIRO en tienda: paga al retirar, no hay comprobante | **Ninguno** |
+
+**¿Por qué dos y no una?** Porque una plantilla con encabezado de imagen **exige** una
+imagen en cada envío: si se manda sin foto, Meta rechaza el mensaje entero y el
+supervisor se queda sin aviso y sin botones. Y en retiro no hay foto que mandar. El
+cuerpo y los botones son los mismos en las dos, así que es copiar y pegar.
+
+Hay que darlas de alta **una sola vez** y esperar que Meta las apruebe (suele tardar de
+minutos a unas horas). Mientras no estén aprobadas el bot no se rompe: cae al aviso de
+siempre y el pedido queda pendiente en el panel (módulo de conversaciones), que es la
 otra puerta para aprobarlo.
 
 ---
@@ -18,7 +27,7 @@ En **YCloud → WhatsApp → Templates → Create template** (o en Meta Business
 Administrador de WhatsApp → Plantillas de mensajes, si preferís hacerlo del lado de
 Meta; es la misma plantilla).
 
-## 2. Datos de la plantilla
+## 2. Datos de la plantilla `aprobacion_pago` (ENVÍO, con comprobante)
 
 | Campo | Valor |
 |---|---|
@@ -91,6 +100,40 @@ sistema manda el "aprobar" en el botón 1 y el "rechazar" en el botón 2):
 | `{{8}}` | `550.00` |
 | `{{9}}` | `5,860.00` |
 
+## 3b. Datos de la plantilla `aprobacion_retiro` (RETIRO, sin comprobante)
+
+Es la misma, con tres diferencias. **Nombre:** `aprobacion_retiro`. Categoría, idioma,
+variables de ejemplo y pie: **idénticos** a la de arriba.
+
+- **Encabezado: Ninguno.** Acá sí va en Ninguno, y es a propósito: no hay comprobante.
+- **Cuerpo** (mismas 9 variables en el mismo orden, sólo cambia la primera línea y la
+  última):
+
+```
+Nuevo pedido para aprobar.
+
+Pedido: {{1}}
+Entrega: {{2}}
+Cliente: {{3}}
+Direccion: {{4}}
+Productos: {{5}}
+Subtotal: RD$ {{6}}
+ITBIS: RD$ {{7}}
+Envio: RD$ {{8}}
+TOTAL: RD$ {{9}}
+
+Es retiro en tienda y paga al retirar, no hay comprobante. Si esta todo bien toca Aprobar pedido y el cliente recibe su numero.
+```
+
+- **Botones** (respuesta rápida, en este orden): `Aprobar pedido` · `No aprobar`.
+
+Los valores de ejemplo pueden ser los mismos, cambiando `{{2}}` por `RETIRO EN TIENDA`,
+`{{4}}` por `Retiro en tienda` y `{{8}}` por `0.00`.
+
+> Las 9 variables se mantienen aunque en retiro el envío sea siempre `0.00`: el bot arma
+> el cuerpo una sola vez para las dos plantillas. Un `Envio: RD$ 0.00` de más es más
+> barato que dos formas distintas de armar el mismo mensaje.
+
 ## 4. Nota sobre el idioma
 
 El bot manda la plantilla en el idioma que diga `TEMPLATE_LANG` (por defecto `es_DO`),
@@ -106,13 +149,14 @@ Ojo: eso cambia el idioma de **todas** las plantillas, así que las otras dos
 (`notificar_pedido_creado`, `alerta_supervisor_cliente`) tienen que estar en ese mismo
 idioma. Lo más simple es crear ésta con el mismo idioma que ya tienen las otras.
 
-## 5. Después de que Meta la apruebe
+## 5. Después de que Meta las apruebe
 
-No hay que tocar nada: el nombre `aprobacion_pago` ya está configurado. Si la creaste
-con otro nombre, ponelo en el `.env`:
+No hay que tocar nada: los nombres `aprobacion_pago` y `aprobacion_retiro` ya están
+configurados. Si les pusiste otros, ponelos en el `.env`:
 
 ```
 TEMPLATE_APROBACION_PAGO=el_nombre_que_le_pusiste
+TEMPLATE_APROBACION_RETIRO=el_otro_nombre
 ```
 
 Para que la **foto del comprobante** llegue, el servidor tiene que ser alcanzable desde
@@ -124,18 +168,31 @@ plantilla sale igual pero **sin la foto**.
 
 ## Cómo funciona en vivo
 
-1. El cliente manda el comprobante → el bot crea el pedido en Odoo, le adjunta el
-   comprobante y le contesta al cliente **"estamos verificando tu pago"** (ese texto se
-   edita en el panel, campo *Mensaje al recibir comprobante*). **El bot nunca da el
-   pago por bueno ni suelta el número de pedido.**
-2. Al 6701 le llega esta plantilla con la foto y el detalle.
+### Envío (hubo transferencia)
+
+1. El cliente manda el comprobante → el bot verifica que el monto cubra el total, crea el
+   pedido en Odoo, le adjunta el comprobante y le contesta **"estamos verificando tu
+   pago"** (texto editable en el panel, *Cuando llega el comprobante*). **Nunca le da el
+   número de pedido.**
+2. Al 6701 le llega **`aprobacion_pago`** con la foto y el detalle.
 3. El supervisor toca:
-   - **Aprobar pago** → el bot le escribe al cliente que su pago fue **verificado y
-     aceptado**, con el **número de pedido** (texto editable en el panel, campo
-     *Mensaje al aprobar el pago*), y la conversación queda marcada como aprobada.
+   - **Aprobar pago** → el cliente recibe que su pago fue **verificado y aceptado**, con
+     el **número** (*Cuando TÚ apruebas el pago*).
    - **No aprobar** → **al cliente no se le dice nada** (a propósito: eso lo habla una
      persona, con el motivo real) y el caso entra en la cola de revisión del panel.
-4. El sistema le responde al supervisor por WhatsApp confirmándole qué pasó.
+
+### Retiro en tienda (paga al retirar)
+
+1. El cliente confirma → el bot crea el pedido en Odoo, **sin pedir comprobante**, y le
+   dice que quedó **tomado y en revisión** (*Retiro: cuando toma el pedido*). Tampoco le
+   da el número.
+2. Al 6701 le llega **`aprobacion_retiro`**: mismo detalle, mismos botones, sin foto.
+3. **Aprobar pedido** → el cliente recibe el **número** y que lo esperan en la tienda,
+   donde paga al retirar (*Cuando TÚ apruebas un retiro*). Acá no se le dice "pago
+   verificado", porque todavía no pagó.
+
+En los dos casos, el sistema le responde al supervisor por WhatsApp confirmándole qué
+pasó.
 
 Si el botón no funcionara (plantilla vieja, cliente de WhatsApp raro), el supervisor
 también puede escribir **`aprobar 160`** o **`rechazar 160`** al mismo número y hace

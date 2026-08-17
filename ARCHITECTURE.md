@@ -146,7 +146,7 @@ re-entrena solo. Fine-tuning queda diferido a cuando haya volumen.
 escribió un humano desde YCloud → pausa 30m ese chat. Fail-safe: ante duda, no pausa.
 **Consecuencias:** el humano puede intervenir desde WhatsApp y el bot se aparta solo.
 
-### ADR-013 · El bot no aprueba pagos: los aprueba el supervisor, desde WhatsApp
+### ADR-013 · El bot no confirma pedidos: los aprueba el supervisor, desde WhatsApp
 **Contexto:** regla del negocio, textual: *"el bot no puede recibir pagos, sólo puede hacer
 cotizaciones; solo yo, el supervisor del 6701, apruebo"*. Antes el bot, al ver un comprobante,
 le confirmaba al cliente que su pedido quedaba "registrado exitosamente" — o sea, daba por
@@ -169,19 +169,29 @@ no una confirmación). En **RETIRO no se pide comprobante**: se paga en el mostr
 - El comprobante **sobrevive al turno** (`estado.guardar_comprobante`, 24 h) porque el cliente
   suele mandar la foto ANTES de dar la dirección: sin eso, en el turno siguiente el bot le
   volvería a pedir la foto que acaba de mandar, en loop. Se **consume** al crear el pedido —una
-  foto respalda UN pedido— y lo que dispara el aviso al supervisor es `ctx.pago_por_verificar`
+  foto respalda UN pedido— y lo que dispara el aviso al supervisor es `ctx.espera_aprobacion`
   (lo escribe la tool), no `es_comprobante`, que es sólo de este turno.
 
 - La respuesta al cliente la fija el CÓDIGO, no el modelo: `_sanear` reemplaza lo que haya
   redactado por `cfg.msg_comprobante` ("estamos verificando tu pago"). El prompt también lo
   prohíbe, pero un prompt es una sugerencia; esto es determinista.
 - El pago queda `pendiente` en el chatmeta (`events.guardar_aprobacion`).
-- Al supervisor le llega una **plantilla de WhatsApp** (`aprobacion_pago`, ver
-  `PLANTILLA_META.md`) con la **foto del comprobante** en la cabecera, el cliente con su
-  dirección, los productos con cantidades y subtotal/ITBIS/envío/total, y dos botones.
+- Al supervisor le llega una **plantilla de WhatsApp** (ver `PLANTILLA_META.md`) con el
+  cliente y su dirección, los productos con cantidades, subtotal/ITBIS/envío/total y dos
+  botones. Son **DOS plantillas**: `aprobacion_pago` con la **foto del comprobante** en la
+  cabecera para envío, y `aprobacion_retiro` sin cabecera para retiro. No es duplicación
+  gratuita: una plantilla con cabecera de imagen EXIGE una imagen en cada envío (sin ella Meta
+  rechaza el mensaje entero), y en retiro no hay foto.
+- **Todo** pedido espera aprobación, no sólo los que tienen pago: en retiro no hay plata que
+  verificar pero sí una decisión (stock, cantidad, cliente), y el negocio la quiere tomar. Lo
+  marca `ctx.espera_aprobacion`, que escribe la tool.
 - El número de pedido sale **sólo** de aprobar: por el botón (webhook) o por el panel. Rechazar
   NO le escribe nada al cliente a propósito — decirle a alguien que su pago no sirve lo hace
   una persona, con el motivo real.
+- Lo que se le dice al cliente **nunca menciona un pago que no existió**: con comprobante,
+  "estamos verificando el pago" y al aprobar "tu pago fue verificado"; en retiro, "tu pedido
+  quedó tomado y en revisión" y al aprobar el número + "pagas al retirar". Cuatro mensajes
+  editables por canal; la marca de aprobación guarda `con_pago` para poder elegir.
 
 La lógica vive en **un** lugar (`app/pagos.py`) porque la acción entra por dos puertas (botón y
 panel), y la parte pura —montos, texto y parseo del botón— en `app/aprobacion.py`, que se testea

@@ -354,23 +354,23 @@ async def crear_pedido_impl(
     c.pedido_modalidad = "envio" if m.startswith("env") else "retiro"
     # La dirección tal como quedó en el pedido (misma nota que se guarda en Odoo).
     c.direccion_entrega = nota.replace("ENTREGA: ", "", 1)
+    # TODO pedido lo aprueba el supervisor antes de que el cliente reciba su número
+    # (ADR-013): con pago en envío, y también en retiro, donde no hay pago pero sí una
+    # decisión (stock, cantidad, cliente). Esto —y no `es_comprobante`— es lo que
+    # dispara el aviso al supervisor, así que funciona igual si la foto llegó antes.
+    c.espera_aprobacion = True
     if tiene_comprobante:
-        # Este pedido tiene un pago atrás que todavía nadie aprobó. Esto —y no
-        # `es_comprobante`— es lo que dispara el aviso al supervisor y el "estamos
-        # verificando" al cliente, así que funciona igual si la foto llegó antes.
-        c.pago_por_verificar = True
         c.comprobante_url = url_comprobante
-        # Y se consume: un comprobante respalda UN pedido, no todos los que el
-        # cliente pida en las próximas 24 h.
+        # Se consume: un comprobante respalda UN pedido, no todos los que el cliente
+        # pida en las próximas 24 h.
         await consumir_comprobante(c.chat_id)
     log.info(
         "pedido_creado", chat_id=c.chat_id, order_id=order_id,
-        modalidad=c.pedido_modalidad, pago_por_verificar=c.pago_por_verificar,
+        modalidad=c.pedido_modalidad, con_comprobante=tiene_comprobante,
     )
+    # `_sanear` reemplaza el texto igual, pero el modelo tiene que leer acá lo mismo o
+    # redacta una confirmación que después se le pisa.
     if tiene_comprobante:
-        # Hay pago de por medio: el número de pedido NO se le da al cliente hasta que
-        # el supervisor apruebe (ADR-013). `_sanear` lo fuerza igual, pero el modelo
-        # tiene que leer acá lo mismo o redacta algo que después se le reemplaza.
         return (
             f"OK: pedido creado con número {order_id} (NO se lo digas al cliente). "
             "Ahora agrega las líneas con agregar_linea_pedido. Al cliente decile SOLO "
@@ -378,9 +378,10 @@ async def crear_pedido_impl(
             "momento. El número de pedido se lo damos cuando el supervisor apruebe."
         )
     return (
-        f"OK: pedido creado con número {order_id}. Ahora agrega las líneas con "
-        "agregar_linea_pedido. Puedes confirmarle al cliente que su pedido quedó "
-        f"registrado con el número {order_id}."
+        f"OK: pedido creado con número {order_id} (NO se lo digas al cliente). "
+        "Ahora agrega las líneas con agregar_linea_pedido. Al cliente decile SOLO que "
+        "su pedido quedó tomado y que el supervisor lo está revisando. El número se lo "
+        "damos cuando el supervisor apruebe."
     )
 
 

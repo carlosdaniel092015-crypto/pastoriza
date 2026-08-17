@@ -106,8 +106,9 @@ class TestParametrosDeLaPlantilla:
                      "total": 1000000.0} for _ in range(20)],
             envio=99999,
         )
-        # 247 = el texto FIJO de la plantilla (ver PLANTILLA_META.md).
-        assert sum(len(v) for v in p) + 247 <= 1024
+        # 260 = el texto FIJO más largo de las dos plantillas, el de retiro
+        # (ver PLANTILLA_META.md). Si cambiás ese texto, rehacé la cuenta.
+        assert sum(len(v) for v in p) + 260 <= 1024
 
 
 class TestPayloadDelBoton:
@@ -485,3 +486,93 @@ class TestPlantillaSinEncabezadoDeImagen:
         monkeypatch.setattr(ycloud, "enviar_plantilla_botones", _plantilla)
         assert await self._avisar() is False
         assert len(intentos) == 2
+
+
+class TestRetiroTambienSeAprueba:
+    """En retiro no hay comprobante, pero el pedido igual lo aprueba el supervisor.
+
+    Y va por OTRA plantilla: una con encabezado de imagen EXIGE una imagen en cada
+    envío, así que la de pago no se puede usar para un aviso sin foto.
+    """
+
+    @pytest.fixture
+    def espia(self, monkeypatch):
+        from app.ycloud import ycloud
+
+        salidas: list[dict] = []
+
+        async def _plantilla(telefono, emisor, nombre, parametros,
+                             imagen_url="", botones=None):
+            salidas.append({"nombre": nombre, "imagen_url": imagen_url,
+                            "botones": botones or [], "parametros": parametros})
+            return True
+
+        monkeypatch.setattr(ycloud, "enviar_plantilla_botones", _plantilla)
+        return salidas
+
+    async def test_usa_la_plantilla_SIN_encabezado(self, espia):
+        from app import pagos
+        from app.settings import settings
+
+        ok = await pagos.avisar_supervisor(
+            chat_id=CLIENTE, emisor=A, order_id=161, modalidad="retiro",
+            cliente="Hija Rey", telefono=CLIENTE, direccion="", lineas=LINEAS,
+            envio=0.0, imagen_url="",  # retiro: no hay comprobante
+        )
+        assert ok is True
+        assert espia[0]["nombre"] == settings.template_aprobacion_retiro
+        assert espia[0]["imagen_url"] == ""
+
+    async def test_con_los_mismos_dos_botones(self, espia):
+        from app import pagos
+
+        await pagos.avisar_supervisor(
+            chat_id=CLIENTE, emisor=A, order_id=161, modalidad="retiro",
+            cliente="Hija Rey", telefono=CLIENTE, direccion="", lineas=LINEAS,
+        )
+        assert espia[0]["botones"] == [
+            f"aprobar:{CLIENTE}:161", f"rechazar:{CLIENTE}:161",
+        ]
+        assert len(espia[0]["parametros"]) == 9, "el cuerpo es el mismo"
+
+
+class TestQueRecibeElClienteAlAprobar:
+    def _meta(self, con_pago: bool) -> str:
+        return json.dumps({
+            "chat_id": CLIENTE, "emisor": A, "user_name": "Clarys",
+            "destino": {"to": CLIENTE}, "ultimo": "ok", "ultimo_ts": 1000,
+            "aprobacion": {"estado": "pendiente", "order_id": 161,
+                           "modalidad": "retiro" if not con_pago else "envio",
+                           "con_pago": con_pago},
+        })
+
+    def test_al_de_retiro_NO_se_le_dice_que_su_pago_fue_verificado(self, cliente):
+        """Le va a pagar en la tienda: decirle "pago verificado" es mentirle."""
+        import app.redis_client as rc
+        from app.panel import events
+
+        rc._pool.hashes[events.CHATMETA_KEY][CLIENTE] = self._meta(con_pago=False)
+        r = cliente.post(f"/panel/api/chats/{CLIENTE}/aprobar-pago")
+        assert r.status_code == 200, r.text
+
+        texto = cliente.enviados[0][2]
+        assert "161" in texto
+        assert "pago" not in texto.lower() or "pagas al retirar" in texto.lower()
+        assert "verificado" not in texto.lower()
+
+    def test_al_que_pago_si(self, cliente):
+        import app.redis_client as rc
+        from app.panel import events
+
+        rc._pool.hashes[events.CHATMETA_KEY][CLIENTE] = self._meta(con_pago=True)
+        cliente.post(f"/panel/api/chats/{CLIENTE}/aprobar-pago")
+        texto = cliente.enviados[0][2]
+        assert "verificado" in texto.lower() and "161" in texto
+
+    def test_el_panel_distingue_los_dos_casos(self, cliente):
+        import app.redis_client as rc
+        from app.panel import events
+
+        rc._pool.hashes[events.CHATMETA_KEY][CLIENTE] = self._meta(con_pago=False)
+        fila = cliente.get("/panel/api/chats").json()["chats"][0]
+        assert fila["aprobacion"] == "pendiente" and fila["con_pago"] is False

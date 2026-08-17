@@ -89,12 +89,15 @@ regatear, preguntar mucho).
 bloquea); en RETIRO no se pide comprobante. Con el pago en regla el bot
 crea el pedido y adjunta el comprobante, pero al cliente le dice sólo "estamos verificando"
 (lo fuerza `_sanear`, no el prompt) y el pago queda `pendiente`. Al supervisor (`ADMIN_PHONE`)
-le llega la plantilla `aprobacion_pago` con la FOTO del comprobante + cliente, dirección,
-productos, subtotal/ITBIS/envío/total y dos botones; el número de pedido sale **sólo** de
-aprobar (botón o panel). Rechazar no le escribe nada al cliente, a propósito. La plantilla hay
-que darla de alta en Meta una vez: **`PLANTILLA_META.md`** tiene el texto exacto; si el texto
-de la plantilla cambia, rehacé los topes de `MAX_*` en `aprobacion.py` (el cuerpo entero no
-puede pasar de 1024). El comprobante se republica en `/panel/media/...`
+le llega una plantilla con cliente, dirección, productos, subtotal/ITBIS/envío/total y dos
+botones; el número de pedido sale **sólo** de aprobar (botón o panel). Rechazar no le escribe
+nada al cliente, a propósito. **TODO pedido espera aprobación** (`ctx.espera_aprobacion`),
+también el de RETIRO, que no lleva comprobante pero sí decisión — y por eso son DOS plantillas:
+`aprobacion_pago` (cabecera de imagen, envío) y `aprobacion_retiro` (sin cabecera), porque una
+plantilla con cabecera de imagen EXIGE imagen en cada envío. Lo que se le dice al cliente nunca
+habla de un pago que no existió (4 mensajes editables; la marca guarda `con_pago`). Hay que dar
+de alta las plantillas en Meta una vez: **`PLANTILLA_META.md`** tiene el texto exacto; si ese
+texto cambia, rehacé los topes de `MAX_*` en `aprobacion.py` (el cuerpo no pasa de 1024). El comprobante se republica en `/panel/media/...`
 (`app/media_publica.py`) porque las URLs de YCloud exigen `X-API-Key` y Meta no puede bajarlas.
 
 **Panel de operación** (`app/panel/`, servido en `/panel`, protegido con `PANEL_TOKEN`): CRM en
