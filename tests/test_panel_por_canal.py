@@ -487,3 +487,92 @@ class TestAgentes:
             en = _get(cliente, "/panel/api/prompts", canal)["personalizados"]
             assert [a["nombre"] for a in en] == ["mayorista"], canal
             assert en[0]["canal"] == ""
+
+
+class TestMoverElSemaforoAMano:
+    """El supervisor puede mover una conversación a la columna que quiera.
+
+    Pedido de la operación: "permíteme en semáforo poder cambiar los estados de crear
+    pedido y así, o sea yo poder moverlo a donde quiera, también aparte de que tú lo
+    haces". Lo manual GANA, pero el cálculo NO se pisa: se guarda aparte, así que
+    volver al automático no perdió nada.
+    """
+
+    CHAT = "18091110050"
+
+    def _chat(self, **extra) -> None:
+        import json as _json
+
+        from app.panel import events
+
+        import app.redis_client as rc
+        rc._pool.hashes.setdefault(events.CHATMETA_KEY, {})[self.CHAT] = _json.dumps({
+            "chat_id": self.CHAT, "emisor": A, "ultimo": "hola",
+            "ultimo_de": "cliente", "ultimo_ts": 1234.0,
+            "score": 100, "score_sem": "cerrado", "score_hitos": ["pedido"],
+            **extra,
+        })
+
+    def _fila(self, cliente) -> dict:
+        return _get(cliente, f"/panel/api/chats?canal={CA}")["chats"][0]
+
+    def test_lo_movido_a_mano_gana(self, cliente):
+        self._chat()
+        assert self._fila(cliente)["sem"] == "cerrado"
+
+        r = cliente.post(f"/panel/api/chats/{self.CHAT}/semaforo",
+                         json={"sem": "gris"})
+        assert r.status_code == 200, r.text
+
+        fila = self._fila(cliente)
+        assert fila["sem"] == "gris"
+        assert fila["sem_manual"] == "gris"
+
+    def test_el_calculo_automatico_NO_se_pierde(self, cliente):
+        """Es lo que hace reversible el movimiento: el panel puede volver a él."""
+        self._chat()
+        cliente.post(f"/panel/api/chats/{self.CHAT}/semaforo", json={"sem": "gris"})
+        fila = self._fila(cliente)
+        assert fila["sem_auto"] == "cerrado"
+        assert fila["score"] == 100
+        assert "Pedido creado" in fila["hitos"]
+
+    def test_volver_al_automatico(self, cliente):
+        self._chat()
+        cliente.post(f"/panel/api/chats/{self.CHAT}/semaforo", json={"sem": "verde"})
+        r = cliente.post(f"/panel/api/chats/{self.CHAT}/semaforo", json={"sem": ""})
+        assert r.status_code == 200
+
+        fila = self._fila(cliente)
+        assert fila["sem"] == "cerrado", "vuelve a lo que dice el cálculo"
+        assert fila["sem_manual"] == ""
+
+    def test_recalcular_no_borra_lo_que_movio_la_persona(self, cliente):
+        """Si «Recalcular todo» pisara lo manual, el trabajo del supervisor se perdería."""
+        self._chat()
+        cliente.post(f"/panel/api/chats/{self.CHAT}/semaforo", json={"sem": "amarillo"})
+        cliente.post(f"/panel/api/chats/calcular-semaforo?canal={CA}&rehacer=true")
+        assert self._fila(cliente)["sem_manual"] == "amarillo"
+
+    def test_un_color_inventado_se_rechaza(self, cliente):
+        self._chat()
+        r = cliente.post(f"/panel/api/chats/{self.CHAT}/semaforo",
+                         json={"sem": "azul"})
+        assert r.status_code == 400
+        assert self._fila(cliente)["sem"] == "cerrado"
+
+    def test_mover_no_cambia_el_ultimo_mensaje_ni_la_hora(self, cliente):
+        """Mover de columna no es actividad de la conversación: no debe reordenarla."""
+        self._chat()
+        cliente.post(f"/panel/api/chats/{self.CHAT}/semaforo", json={"sem": "verde"})
+        fila = self._fila(cliente)
+        assert fila["ultimo_ts"] == 1234.0 and fila["ultimo"] == "hola"
+        assert fila["ultimo_de"] == "cliente"
+
+    def test_pide_token(self, cliente, monkeypatch):
+        from app.settings import settings
+
+        monkeypatch.setattr(settings, "panel_token", "secreto")
+        self._chat()
+        r = cliente.post(f"/panel/api/chats/{self.CHAT}/semaforo", json={"sem": "verde"})
+        assert r.status_code == 401
