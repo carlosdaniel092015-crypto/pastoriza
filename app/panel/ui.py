@@ -102,8 +102,9 @@ PANEL_HTML = r"""<!doctype html>
   .chdr .c{font-family:var(--mono);margin-left:6px;color:var(--tx)}
   .chdr .col{margin-left:auto;background:transparent;border:0;color:var(--mut);font-size:16px}
   .chat{display:block;width:100%;text-align:left;background:transparent;border:0;border-bottom:1px solid var(--line);
-    border-left:3px solid transparent;padding:11px 15px}
+    border-left:3px solid transparent;padding:11px 15px;cursor:pointer}
   .chat:hover{background:var(--panel)} .chat.sel{background:var(--panel2);border-left-color:var(--senal)}
+  .asignaruno{display:flex;gap:6px;flex-wrap:wrap;margin-top:8px;cursor:default}
   .chat .top{display:flex;align-items:center;gap:8px;margin-bottom:3px}
   .chat .n{font-weight:600;font-size:14px;flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
   .chat .n.num{font-family:var(--mono);font-weight:500;letter-spacing:-.02em}
@@ -848,9 +849,19 @@ function renderChats(){
     // Con "Todos" se muestra de qué número entró; dentro de un canal sobra.
     const cch=(!canalSel&&c.canal_nombre)?`<span class="cch" title="Entró por ${esc(c.canal_nombre)}">${esc(c.canal_nombre)}</span>`:'';
     const sem=c.sem?`<span class="sem ${c.sem}" title="${esc(tituloSem(c))}"></span>`:'';
-    return `<button class="chat ${c.chat_id===selChat?'sel':''} ${c.sem?'sem-'+c.sem:''}" onclick="openChat('${c.chat_id}')">
+    // "Sin canal": además del botón que las manda TODAS al mismo número (avisoSinCanal),
+    // acá se puede elegir una por una a qué número va ÉSTA en particular.
+    const asignarUno=(canalSel===SIN_CANAL)?
+      '<div class="asignaruno" onclick="event.stopPropagation()">'+
+      CANALES.filter(x=>x.canal&&x.canal!==SIN_CANAL)
+        .map(x=>'<button class="btn sec sm" onclick="asignarCanalUno(\''+c.chat_id+'\',\''+x.canal+'\')">→ '+esc(x.nombre)+'</button>')
+        .join('')+
+      '</div>' : '';
+    // div en vez de button: con "Sin canal" lleva botones de asignar ADENTRO, y un
+    // <button> no puede anidar otro <button> (el navegador lo cierra antes de tiempo).
+    return `<div class="chat ${c.chat_id===selChat?'sel':''} ${c.sem?'sem-'+c.sem:''}" role="button" tabindex="0" onclick="openChat('${c.chat_id}')" onkeydown="if(event.key==='Enter')openChat('${c.chat_id}')">
       <div class="top">${sem}<span class="n ${esNum(nombre)?'num':''}">${esc(nombre)}</span>${tag}<span class="h">${fmtRel(c.ultimo_ts)}</span>${dot}</div>
-      <div class="m">${quienDijo(c.ultimo_de)}${esc(c.ultimo)||'—'}${cch}</div></button>`;
+      <div class="m">${quienDijo(c.ultimo_de)}${esc(c.ultimo)||'—'}${cch}</div>${asignarUno}</div>`;
   }).join('');
 }
 function avisoSinCanal(n){
@@ -871,6 +882,13 @@ async function asignarCanal(canal){
     canalSel=canal; localStorage.setItem('panel_canal',canal); _chatsSig='';
     await loadChats();
     showToast('order','✓ Conversaciones asignadas',(d.asignadas||0)+' ahora están en '+nombre);
+  }catch(e){ alert('No se pudo asignar: '+e); } }
+async function asignarCanalUno(chatId,canal){
+  const c=CANALES.find(x=>x.canal===canal); const nombre=c?c.nombre:canal;
+  try{
+    await api('/chats/'+encodeURIComponent(chatId)+'/asignar-canal?canal='+encodeURIComponent(canal),{method:'POST'});
+    _chatsSig=''; await loadChats();
+    showToast('order','✓ Conversación asignada','Ahora está en '+nombre);
   }catch(e){ alert('No se pudo asignar: '+e); } }
 async function aprobarPago(id){
   const c=chatsCache.find(x=>x.chat_id===id)||{};
