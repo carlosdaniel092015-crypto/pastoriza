@@ -218,6 +218,69 @@ async def consumir_comprobante(chat_id: str) -> None:
     )
 
 
+# El pedido ABIERTO del chat: creado y todavía sin decidir. Vive 7 días porque el
+# cliente cotiza un viernes y transfiere el lunes — más que la sesión (24 h), a
+# propósito. Sin esto, el comprobante que llega días después hace que el modelo llame
+# `crear_pedido` otra vez y quede un pedido DUPLICADO y VACÍO en Odoo, con el
+# comprobante adjunto al vacío (pasó de verdad: S00163 con las líneas, S00166 en 0.00).
+TTL_PEDIDO_ABIERTO = 604_800  # 7 días
+
+
+async def guardar_pedido_abierto(
+    chat_id: str, order_id: int, modalidad: str = "", direccion: str = ""
+) -> None:
+    if not chat_id or not order_id:
+        return
+    await _escritura_idempotente(
+        lambda r: r.set(
+            settings.key("pedido_abierto", chat_id),
+            json.dumps({
+                "order_id": int(order_id),
+                "modalidad": modalidad,
+                "direccion": direccion,
+                "ts": time.time(),
+            }),
+            ex=TTL_PEDIDO_ABIERTO,
+        ),
+        "guardar_pedido_abierto",
+        chat_id=chat_id,
+    )
+
+
+async def leer_pedido_abierto(chat_id: str) -> dict:
+    """{'order_id','modalidad','direccion','ts'} o {} si no hay (o si Redis falla).
+
+    Ante duda devuelve {}: no adoptar un pedido que no se pudo confirmar es preferible
+    a adoptar uno equivocado.
+    """
+    if not chat_id:
+        return {}
+    try:
+        raw = await with_reconnect(
+            lambda r: r.get(settings.key("pedido_abierto", chat_id))
+        )
+    except Exception:  # noqa: BLE001
+        return {}
+    if not raw:
+        return {}
+    try:
+        data = json.loads(raw)
+    except json.JSONDecodeError:
+        return {}
+    return data if isinstance(data, dict) and data.get("order_id") else {}
+
+
+async def cerrar_pedido_abierto(chat_id: str) -> None:
+    """Ya se decidió (aprobado o rechazado): el próximo pedido es uno nuevo."""
+    if not chat_id:
+        return
+    await _escritura_idempotente(
+        lambda r: r.delete(settings.key("pedido_abierto", chat_id)),
+        "cerrar_pedido_abierto",
+        chat_id=chat_id,
+    )
+
+
 async def tocar_ventana_24h(chat_id: str) -> None:
     await _escritura_idempotente(
         lambda r: r.set(

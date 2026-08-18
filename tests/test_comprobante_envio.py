@@ -300,3 +300,132 @@ class TestElComprobanteSobreviveAlTurno:
                    imagen_url="https://ycloud/nuevo.jpg", cotizado_total=5860.0)
         await _crear(ctx, **ENVIO)
         assert ctx.comprobante_url == "https://ycloud/nuevo.jpg"
+
+
+class TestUnPagoNoCreaOtroPedido:
+    """El escenario REAL que se rompió, con sus números.
+
+    El viernes se creó el pedido S00163 con su línea (300 x BOTELLA LISA ECO 8 OZ,
+    total RD$1,761.00 + RD$550 de envío = RD$2,311.00 cotizados). El lunes el cliente
+    transfirió, el modelo volvió a llamar `crear_pedido` y quedó un SEGUNDO pedido
+    (S00166) VACÍO, en RD$0.00, con el comprobante adjunto al vacío. El supervisor
+    recibía un pago de RD$2,311 contra un pedido de RD$0.00.
+    """
+
+    LINEAS_ODOO = [
+        {"name": "[BLISA8] BOTELLA LISA ECO. 8 OZ (INCLUYE TAPAS)",
+         "product_uom_qty": 300.0, "price_unit": 5.87, "price_total": 1761.0},
+    ]
+    COMP_2311 = "COMPROBANTE_PAGO: [Banreservas, monto RD$2,311.00, ref 998877, 17/08]"
+
+    @pytest.fixture
+    def viernes(self, monkeypatch):
+        """Hay un pedido abierto (162) de hace tres días, con sus líneas en Odoo."""
+        estado = {"abierto": {"order_id": 162, "modalidad": "envio",
+                              "direccion": "Calle Isabel Aguiar #240, Herrera"},
+                  "consumido": False}
+
+        async def _leer_abierto(chat_id):
+            return dict(estado["abierto"])
+
+        async def _consumir(chat_id):
+            estado["consumido"] = True
+
+        async def _search_read(modelo, dominio, campos, limit=80, **kw):
+            assert modelo == "sale.order.line"
+            assert dominio == [["order_id", "=", 162]]
+            return list(self.LINEAS_ODOO)
+
+        async def _cotizado(chat_id):
+            return 2311.0
+
+        monkeypatch.setattr(odoo_tools, "leer_pedido_abierto", _leer_abierto)
+        monkeypatch.setattr(odoo_tools, "consumir_comprobante", _consumir)
+        monkeypatch.setattr(odoo_tools, "leer_cotizacion", _cotizado)
+        monkeypatch.setattr(odoo_tools.odoo, "search_read", _search_read)
+        return estado
+
+    async def test_el_pago_va_al_pedido_QUE_YA_EXISTIA(self, viernes, _sin_odoo_ni_redis):
+        ctx = _ctx(es_comprobante=True, comprobante_texto=self.COMP_2311,
+                   imagen_url="https://ycloud/comp.jpg")
+        salida = await _crear(ctx, **ENVIO)
+
+        assert salida.startswith("OK"), salida
+        assert ctx.order_id == 162, "es el pedido del viernes, no uno nuevo"
+        assert _sin_odoo_ni_redis == [], "NO se creó un segundo sale.order"
+
+    async def test_y_el_aviso_lleva_las_lineas_reales_del_pedido(self, viernes):
+        """Sin esto el supervisor decide sobre un pago viendo '(sin líneas cargadas)'."""
+        ctx = _ctx(es_comprobante=True, comprobante_texto=self.COMP_2311,
+                   imagen_url="https://ycloud/comp.jpg")
+        await _crear(ctx, **ENVIO)
+
+        assert ctx.lineas_creadas == 1
+        assert ctx.lineas[0]["cantidad"] == 300
+        assert "BOTELLA LISA ECO. 8 OZ" in ctx.lineas[0]["nombre"]
+        assert ctx.lineas[0]["total"] == 1761.0
+        assert ctx.espera_aprobacion is True
+        assert ctx.comprobante_url == "https://ycloud/comp.jpg"
+        assert ctx.direccion_entrega.startswith("Calle Isabel Aguiar")
+
+    async def test_le_dice_al_modelo_que_NO_agregue_las_lineas_de_nuevo(self, viernes):
+        """Si las agregara otra vez, el pedido quedaría con el doble de mercancía."""
+        ctx = _ctx(es_comprobante=True, comprobante_texto=self.COMP_2311)
+        salida = await _crear(ctx, **ENVIO)
+        assert "NO crees otro pedido" in salida
+        assert "NO agregues líneas" in salida
+
+    async def test_el_comprobante_se_consume(self, viernes):
+        ctx = _ctx(es_comprobante=True, comprobante_texto=self.COMP_2311)
+        await _crear(ctx, **ENVIO)
+        assert viernes["consumido"] is True
+
+    async def test_un_pago_corto_no_se_aplica_al_pedido_viejo(
+        self, viernes, _sin_odoo_ni_redis
+    ):
+        ctx = _ctx(es_comprobante=True, comprobante_texto="RD$500.00")
+        salida = await _crear(ctx, **ENVIO)
+        assert salida.startswith("ERROR") and "1,811.00" in salida
+        assert ctx.order_id is None, "no queda marcado como pagado"
+        assert ctx.espera_aprobacion is False
+        assert _sin_odoo_ni_redis == []
+
+    async def test_sin_comprobante_NO_se_adopta_nada(self, viernes):
+        """Adoptar sólo aplica a un PAGO. Sin pago, en envío no hay pedido."""
+        ctx = _ctx()
+        salida = await _crear(ctx, **ENVIO)
+        assert salida.startswith("ERROR") and "comprobante" in salida.lower()
+        assert ctx.order_id is None
+
+    async def test_si_Odoo_no_da_las_lineas_el_pago_igual_se_aplica(
+        self, viernes, monkeypatch
+    ):
+        """Perder el detalle es malo; perder el pago es peor. Queda para revisión."""
+        async def _explota(*a, **kw):
+            raise RuntimeError("odoo caido")
+
+        monkeypatch.setattr(odoo_tools.odoo, "search_read", _explota)
+        ctx = _ctx(es_comprobante=True, comprobante_texto=self.COMP_2311)
+        salida = await _crear(ctx, **ENVIO)
+        assert salida.startswith("OK") and ctx.order_id == 162
+        assert "pedido_sin_lineas" in ctx.motivo_revision
+
+
+class TestElPedidoQuedaAbierto:
+    async def test_al_crearlo_se_registra_para_el_pago_que_venga_despues(
+        self, monkeypatch, _sin_odoo_ni_redis
+    ):
+        guardados: list[tuple] = []
+
+        async def _guardar(chat_id, order_id, modalidad="", direccion=""):
+            guardados.append((chat_id, order_id, modalidad, direccion))
+
+        async def _sin_abierto(chat_id):
+            return {}
+
+        monkeypatch.setattr(odoo_tools, "guardar_pedido_abierto", _guardar)
+        monkeypatch.setattr(odoo_tools, "leer_pedido_abierto", _sin_abierto)
+        ctx = _ctx()
+        await _crear(ctx, modalidad="retiro")
+
+        assert guardados == [(ctx.chat_id, 777, "retiro", "Retiro en tienda")]

@@ -576,3 +576,46 @@ class TestQueRecibeElClienteAlAprobar:
         rc._pool.hashes[events.CHATMETA_KEY][CLIENTE] = self._meta(con_pago=False)
         fila = cliente.get("/panel/api/chats").json()["chats"][0]
         assert fila["aprobacion"] == "pendiente" and fila["con_pago"] is False
+
+
+class TestAprobarCierraElPedido:
+    """Decidido el pedido, el próximo que pida el cliente es un pedido NUEVO.
+
+    Si el pedido siguiera "abierto" después de aprobarlo, la próxima transferencia del
+    mismo cliente se aplicaría encima de un pedido ya despachado.
+    """
+
+    @pytest.fixture
+    def con_abierto(self, monkeypatch):
+        from app import pagos
+
+        cerrados: list[str] = []
+
+        async def _cerrar(chat_id):
+            cerrados.append(chat_id)
+
+        monkeypatch.setattr(pagos, "cerrar_pedido_abierto", _cerrar)
+        return cerrados
+
+    def test_al_aprobar(self, cliente, con_abierto):
+        r = cliente.post(f"/panel/api/chats/{CLIENTE}/aprobar-pago")
+        assert r.status_code == 200, r.text
+        assert con_abierto == [CLIENTE]
+
+    def test_al_rechazar(self, cliente, con_abierto):
+        r = cliente.post(f"/panel/api/chats/{CLIENTE}/rechazar-pago",
+                         json={"motivo": "monto distinto"})
+        assert r.status_code == 200
+        assert con_abierto == [CLIENTE]
+
+    def test_si_el_envio_al_cliente_falla_NO_se_cierra(self, cliente, con_abierto,
+                                                       monkeypatch):
+        """El pago sigue pendiente: el pedido tiene que seguir abierto."""
+        from app.ycloud import ycloud
+
+        async def _falla(*a, **kw):
+            return False
+
+        monkeypatch.setattr(ycloud, "enviar_texto", _falla)
+        assert cliente.post(f"/panel/api/chats/{CLIENTE}/aprobar-pago").status_code == 502
+        assert con_abierto == []
