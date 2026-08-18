@@ -174,6 +174,32 @@ class TestSinCanal:
     def test_sin_canal_no_se_puede_asignar(self, cliente):
         assert cliente.post("/panel/api/chats/asignar-canal").status_code == 400
 
+    def test_asignar_una_por_una_al_numero_que_se_quiera(self, cliente):
+        self._viejas(cliente, 3)
+        d = _get(cliente, "/panel/api/chats")
+        chats = sorted(c["chat_id"] for c in d["chats"])
+        r = cliente.post(f"/panel/api/chats/{chats[0]}/asignar-canal?canal={CA}")
+        assert r.status_code == 200, r.text
+        assert r.json()["canal"] == CA
+        r2 = cliente.post(f"/panel/api/chats/{chats[1]}/asignar-canal?canal={CB}")
+        assert r2.status_code == 200, r2.text
+        assert r2.json()["canal"] == CB
+
+        d2 = _get(cliente, "/panel/api/chats")
+        por_chat = {c["chat_id"]: c["canal"] for c in d2["chats"]}
+        assert por_chat[chats[0]] == CA
+        assert por_chat[chats[1]] == CB
+        assert por_chat[chats[2]] == "-"  # la tercera, sin tocar
+
+    def test_asignar_una_sin_numero_falla(self, cliente):
+        self._viejas(cliente, 1)
+        d = _get(cliente, "/panel/api/chats")
+        chat_id = d["chats"][0]["chat_id"]
+        assert cliente.post(f"/panel/api/chats/{chat_id}/asignar-canal").status_code == 400
+
+    def test_asignar_una_inexistente_da_404(self, cliente):
+        assert cliente.post(f"/panel/api/chats/no-existe/asignar-canal?canal={CA}").status_code == 404
+
 
 class TestSemaforoEnLaLista:
     """El semáforo de cierre viaja en la lista, con su motivo y sin costo extra."""

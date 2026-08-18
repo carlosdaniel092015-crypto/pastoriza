@@ -425,6 +425,41 @@ async def api_asignar_canal(
     return {"ok": True, "asignadas": len(huerfanos), "canal": c}
 
 
+@panel_router.post("/api/chats/{chat_id}/asignar-canal")
+async def api_asignar_canal_uno(
+    chat_id: str, canal: str = "", x_panel_token: str | None = Header(default=None)
+) -> dict:
+    """Igual que /api/chats/asignar-canal pero para UNA sola conversación: cuando
+    entre el operador quiere repartirlas a mano, número por número, en vez de mandar
+    todas las huérfanas al mismo canal."""
+    _auth(x_panel_token)
+    c = canal_id(canal)
+    if not c:
+        raise HTTPException(status_code=400, detail="indicá a qué número asignarla")
+
+    meta = await events.todos_chatmeta(estricto=True)
+    m = meta.get(chat_id)
+    if m is None:
+        raise HTTPException(status_code=404, detail="conversación no encontrada")
+    m = dict(m)
+    m["emisor"] = c
+    m.setdefault("destino", {"to": chat_id})
+    try:
+        await with_reconnect(
+            lambda r: r.hset(events.CHATMETA_KEY, chat_id, json.dumps(m, ensure_ascii=False))
+        )
+    except Exception as exc:  # noqa: BLE001
+        log.warning("asignar_canal_uno_fallo", chat_id=chat_id, error=str(exc))
+        raise HTTPException(status_code=502, detail="no se pudo guardar") from exc
+
+    log.info("canal_asignado_a_uno", canal=c, chat_id=chat_id)
+    await events.publicar(
+        "control", chat_id, emisor=c,
+        detalle=f"conversación asignada a {nombre_canal(c)}",
+    )
+    return {"ok": True, "canal": c}
+
+
 @panel_router.post("/api/chats/{chat_id}/semaforo")
 async def api_mover_semaforo(
     chat_id: str, request: Request, x_panel_token: str | None = Header(default=None)
