@@ -21,7 +21,13 @@ from typing import Any
 
 from app import aprobacion, media_publica
 from app.business_config import load_config
-from app.estado import cerrar_pedido_abierto, encolar_revision
+from app.estado import (
+    cerrar_pedido_abierto,
+    encolar_revision,
+    limpiar_motivo,
+    motivo_pendiente,
+    pedir_motivo,
+)
 from app.logging_conf import get_logger
 from app.media import descargar, mime_de_url
 from app.panel import events
@@ -254,19 +260,26 @@ async def aprobar(chat_id: str, via: str = "panel") -> dict:
     return {"ok": True, "order_id": order_id, "enviado": True}
 
 
+# Si nunca llega un motivo (el supervisor no contesta, o el panel lo manda vacío), el
+# cliente igual tiene que recibir algo que se entienda y no lo acuse de nada.
+MOTIVO_NEUTRO = "necesitamos revisar unos detalles contigo"
+
+
 async def rechazar(chat_id: str, motivo: str = "", via: str = "panel") -> dict:
-    """Marca el pedido como NO aprobado y le avisa al cliente, sin decirle por qué.
+    """Marca el pedido como NO aprobado. El MOTIVO lo escribe el supervisor.
 
     El cliente NO puede quedar en silencio: pidió, esperó, y se le dijo que estaba en
-    revisión. Antes esto no le escribía nada y el cliente quedaba esperando para siempre.
+    revisión. Y tampoco alcanza con un aviso vacío — "no se pudo confirmar" y nada más
+    deja a alguien que pagó sin saber qué hacer.
 
-    Pero el MOTIVO no se lo dice el bot: el motivo real (monto distinto, comprobante
-    ilegible, transferencia no acreditada, sin stock) es una conversación de una persona.
-    El mensaje es neutro y le da el WhatsApp del supervisor para resolverlo.
+    Pero el motivo no lo INVENTA el bot: monto distinto, comprobante ilegible o sin
+    stock son hechos que sólo conoce una persona. Así que:
+      - desde el PANEL, el motivo viene escrito en el mismo clic;
+      - desde WHATSAPP, el botón no puede llevarlo, así que se marca el rechazo, se le
+        PIDE el motivo al supervisor y el aviso al cliente sale con `aplicar_motivo`.
 
-    El estado se marca IGUAL aunque el aviso no salga: es lo que el supervisor ve, y
-    perderlo dejaría el pedido como pendiente después de que él ya decidió. Si no salió,
-    vuelve `enviado: False` y queda en la cola de revisión.
+    El estado se marca IGUAL en los dos casos: es lo que el supervisor ve, y perderlo
+    dejaría el pedido como pendiente después de que él ya decidió.
     """
     meta = await events.leer_chatmeta(chat_id)
     apro = meta.get("aprobacion") or {}
@@ -276,11 +289,51 @@ async def rechazar(chat_id: str, motivo: str = "", via: str = "panel") -> dict:
     order_id = apro.get("order_id")
     await events.guardar_aprobacion(chat_id, "rechazado", order_id, motivo)
     await cerrar_pedido_abierto(chat_id)
+    log.info("pedido_rechazado", chat_id=chat_id, order_id=order_id, via=via)
 
+    if not motivo.strip() and via == "whatsapp":
+        # El botón no puede traer el motivo: se lo pedimos y el cliente espera un
+        # momento más. Vale la pena: recibir el motivo real es mejor que recibir rápido
+        # un "no se pudo".
+        await pedir_motivo(chat_id, order_id)
+        await _registrar_rechazo(chat_id, meta, order_id, motivo, avisado=False)
+        return {"ok": True, "order_id": order_id, "enviado": False, "pide_motivo": True}
+
+    enviado = await _avisar_rechazo(chat_id, meta, motivo)
+    await _registrar_rechazo(chat_id, meta, order_id, motivo, avisado=enviado)
+    return {"ok": True, "order_id": order_id, "enviado": enviado}
+
+
+async def aplicar_motivo(motivo: str) -> dict | None:
+    """El supervisor contestó con el motivo: se lo mandamos al cliente. None si no
+    había ningún rechazo esperando (entonces el mensaje sigue su curso normal)."""
+    pend = await motivo_pendiente()
+    if not pend:
+        return None
+    chat_id = str(pend.get("chat_id") or "")
+    await limpiar_motivo()
+
+    meta = await events.leer_chatmeta(chat_id)
+    order_id = pend.get("order_id")
+    # Queda guardado con el pedido: el panel tiene que mostrar por qué se rechazó.
+    await events.guardar_aprobacion(chat_id, "rechazado", order_id, motivo)
+    enviado = await _avisar_rechazo(chat_id, meta, motivo)
+    log.info(
+        "motivo_de_rechazo_enviado",
+        chat_id=chat_id, order_id=order_id, enviado=enviado,
+    )
+    return {
+        "ok": enviado, "order_id": order_id, "chat_id": chat_id, "enviado": enviado,
+        "cliente": meta.get("user_name", ""),
+    }
+
+
+async def _avisar_rechazo(chat_id: str, meta: dict, motivo: str) -> bool:
+    """Le dice al cliente que su pedido no se confirmó, con el motivo del supervisor."""
     emisor = meta.get("emisor") or settings.ycloud_from
     destino = meta.get("destino") or {"to": chat_id}
     cfg = await load_config(emisor)
-    texto = _texto_rechazo(cfg)
+    texto = _texto_rechazo(cfg, motivo)
     enviado = False
     try:
         enviado = await ycloud.enviar_texto(destino, emisor, texto, simular_tipeo=False)
@@ -294,32 +347,35 @@ async def rechazar(chat_id: str, motivo: str = "", via: str = "panel") -> dict:
             ultimo=texto, ultimo_de="bot",
         )
     else:
-        log.error("rechazo_no_avisado", chat_id=chat_id, order_id=order_id)
+        log.error("rechazo_no_avisado", chat_id=chat_id)
+    return enviado
 
-    motivos = ["pago_rechazado"] if enviado else ["pago_rechazado", "cliente_sin_aviso"]
+
+async def _registrar_rechazo(
+    chat_id: str, meta: dict, order_id, motivo: str, avisado: bool
+) -> None:
+    """Cola de revisión + evento del panel. `cliente_sin_aviso` es lo que hace visible
+    el caso peor: rechazado y el cliente sin enterarse."""
+    motivos = ["pago_rechazado"] if avisado else ["pago_rechazado", "cliente_sin_aviso"]
     await encolar_revision(
         chat_id, motivos, motivo or "(sin motivo)", order_id, meta.get("user_name", ""),
     )
     await events.publicar(
-        "revision", chat_id, emisor=emisor,
+        "revision", chat_id, emisor=meta.get("emisor", ""),
         user_name=meta.get("user_name", ""), motivos=motivos,
         resumen=motivo[:200] or "Pedido no aprobado por el supervisor",
     )
-    log.info(
-        "pedido_rechazado",
-        chat_id=chat_id, order_id=order_id, via=via, avisado=enviado,
-    )
-    return {"ok": True, "order_id": order_id, "enviado": enviado}
 
 
-def _texto_rechazo(cfg) -> str:
+def _texto_rechazo(cfg, motivo: str = "") -> str:
     plantilla = (cfg.msg_rechazado or "").strip()
     numero = (cfg.pago_whatsapp or "").strip()
+    limpio = " ".join(str(motivo or "").split())[:300].rstrip(".") or MOTIVO_NEUTRO
     try:
-        return plantilla.format(numero=numero)
+        return plantilla.format(motivo=limpio, numero=numero)
     except (KeyError, IndexError, ValueError):
         # Si alguien dejó una llave rara en el mensaje editable, no se pierde el aviso.
-        return f"{plantilla} ({numero})".strip()
+        return f"{plantilla} ({limpio} · {numero})".strip()
 
 
 # ------------------------------------------- respuesta del supervisor ---
@@ -343,11 +399,14 @@ async def procesar_respuesta_supervisor(texto: str) -> dict[str, Any] | None:
     if accion == aprobacion.ACCION_APROBAR:
         res = await aprobar(chat_id, via="whatsapp")
     else:
-        res = await rechazar(chat_id, "No aprobado por el supervisor", via="whatsapp")
+        # Sin motivo a propósito: el botón no puede traerlo, así que `rechazar` se lo
+        # pide al supervisor y el aviso al cliente sale con ese motivo (aplicar_motivo).
+        res = await rechazar(chat_id, "", via="whatsapp")
     return {**res, "accion": accion, "chat_id": chat_id, "order_id": order_id}
 
 
 __all__ = [
+    "aplicar_motivo",
     "aprobar",
     "avisar_supervisor",
     "buscar_por_pedido",

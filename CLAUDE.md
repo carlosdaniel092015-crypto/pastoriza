@@ -100,8 +100,8 @@ crea el pedido y adjunta el comprobante, pero al cliente le dice sólo "estamos 
 (lo fuerza `_sanear`, no el prompt) y el pago queda `pendiente`. Al supervisor (`ADMIN_PHONE`)
 le llega una plantilla con cliente, dirección, productos, subtotal/ITBIS/envío/total y dos
 botones; el número de pedido sale **sólo** de aprobar (botón o panel). Al rechazar, el cliente
-recibe un aviso NEUTRO (`msg_rechazado`) con el WhatsApp del supervisor: el motivo lo explica
-una persona, pero nadie queda en silencio. **TODO pedido espera aprobación** (`ctx.espera_aprobacion`),
+recibe el MOTIVO que escribió el supervisor, tal cual (`msg_rechazado`): desde el panel viene
+en el clic, desde WhatsApp el bot se lo PIDE (`estado.motivo_pendiente`) y avisa al contestar. **TODO pedido espera aprobación** (`ctx.espera_aprobacion`),
 también el de RETIRO, que no lleva comprobante pero sí decisión — y por eso son DOS plantillas:
 `aprobacion_pago` (cabecera de imagen, envío) y `aprobacion_retiro1` (sin cabecera), porque una
 plantilla con cabecera de imagen EXIGE imagen en cada envío. Lo que se le dice al cliente nunca

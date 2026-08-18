@@ -281,6 +281,47 @@ async def cerrar_pedido_abierto(chat_id: str) -> None:
     )
 
 
+# Cuando el supervisor NO aprueba un pedido, el bot le pide el MOTIVO y se lo manda al
+# cliente. Entre el botón y su respuesta hay que recordar de qué pedido se estaba
+# hablando. Es una sola key (hay un solo supervisor) y dura poco: pasada la media hora,
+# lo que escriba ya no se toma como motivo de nada.
+TTL_MOTIVO = 1800  # 30 min
+MOTIVO_KEY = "motivo_pendiente"
+
+
+async def pedir_motivo(chat_id: str, order_id: int | None) -> None:
+    await _escritura_idempotente(
+        lambda r: r.set(
+            settings.key(MOTIVO_KEY),
+            json.dumps({"chat_id": chat_id, "order_id": order_id, "ts": time.time()}),
+            ex=TTL_MOTIVO,
+        ),
+        "pedir_motivo",
+        chat_id=chat_id,
+    )
+
+
+async def motivo_pendiente() -> dict:
+    """{'chat_id','order_id','ts'} del rechazo que espera un motivo, o {}."""
+    try:
+        raw = await with_reconnect(lambda r: r.get(settings.key(MOTIVO_KEY)))
+    except Exception:  # noqa: BLE001
+        return {}
+    if not raw:
+        return {}
+    try:
+        data = json.loads(raw)
+    except json.JSONDecodeError:
+        return {}
+    return data if isinstance(data, dict) and data.get("chat_id") else {}
+
+
+async def limpiar_motivo() -> None:
+    await _escritura_idempotente(
+        lambda r: r.delete(settings.key(MOTIVO_KEY)), "limpiar_motivo"
+    )
+
+
 async def tocar_ventana_24h(chat_id: str) -> None:
     await _escritura_idempotente(
         lambda r: r.set(

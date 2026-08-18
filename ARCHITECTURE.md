@@ -199,11 +199,15 @@ no una confirmación). En **RETIRO no se pide comprobante**: se paga en el mostr
   verificar pero sí una decisión (stock, cantidad, cliente), y el negocio la quiere tomar. Lo
   marca `ctx.espera_aprobacion`, que escribe la tool.
 - El número de pedido sale **sólo** de aprobar: por el botón (webhook) o por el panel. Al
-  **rechazar**, el cliente SÍ recibe un aviso —pidió, esperó y se le dijo que estaba en
-  revisión: no puede quedar en silencio— pero **sin el motivo** y con el WhatsApp del
-  supervisor para resolverlo. El motivo real (monto distinto, comprobante ilegible, sin stock)
-  lo explica una persona; el bot no acusa a nadie. El estado se marca igual aunque el aviso no
-  salga (es lo que ve el supervisor), y ahí el caso entra a revisión como `cliente_sin_aviso`.
+  **rechazar**, el cliente recibe un aviso con el **MOTIVO que escribió el supervisor**, tal
+  cual: pidió, esperó y se le dijo que estaba en revisión, así que no puede quedar en silencio
+  ni recibir un "no se pudo" sin explicación. El motivo lo escribe una PERSONA y el bot no lo
+  reformula ni lo inventa — monto distinto, comprobante ilegible o sin stock son hechos que
+  sólo conoce ella. Desde el panel el motivo viene en el mismo clic; desde WhatsApp el botón no
+  puede llevarlo, así que el bot **se lo pide** y manda el aviso cuando el supervisor contesta
+  (`estado.motivo_pendiente`, 30 min). El rechazo se marca de una en los dos casos —el
+  supervisor ya decidió— y si el aviso no sale, el caso entra a revisión como
+  `cliente_sin_aviso`.
 - Lo que se le dice al cliente **nunca menciona un pago que no existió**: con comprobante,
   "estamos verificando el pago" y al aprobar "tu pago fue verificado"; en retiro, "tu pedido
   quedó tomado y en revisión" y al aprobar el número + "pagas al retirar". Cuatro mensajes

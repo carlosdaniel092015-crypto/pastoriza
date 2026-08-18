@@ -169,13 +169,21 @@ class TestAprobacionDesdeElPanel:
             "rechazado"
         )
 
-    def test_pero_NO_le_dice_el_motivo(self, cliente):
-        """El motivo real lo explica una persona: el bot no acusa a nadie."""
+    def test_y_le_dice_el_MOTIVO_que_escribio_el_supervisor(self, cliente):
+        """El motivo lo escribe una persona y va TAL CUAL: el bot no lo reformula."""
         cliente.post("/panel/api/chats/18091112222/rechazar-pago",
-                     json={"motivo": "el comprobante es falso"})
+                     json={"motivo": "el monto transferido no coincide"})
         texto = cliente.enviados[0][2]
-        assert "falso" not in texto.lower()
+        assert "el monto transferido no coincide" in texto
         assert "829" in texto, "tiene que darle a dónde escribir"
+
+    def test_sin_motivo_manda_algo_que_no_acusa_a_nadie(self, cliente):
+        """Desde el panel se puede rechazar sin escribir motivo: el aviso igual sale."""
+        cliente.post("/panel/api/chats/18091112222/rechazar-pago", json={"motivo": ""})
+        texto = cliente.enviados[0][2]
+        from app.pagos import MOTIVO_NEUTRO
+
+        assert MOTIVO_NEUTRO in texto
 
     def test_si_no_se_le_pudo_avisar_igual_queda_rechazado(self, cliente, monkeypatch):
         """El estado es lo que ve el supervisor: perderlo lo dejaría creyendo que sigue

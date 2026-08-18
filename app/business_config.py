@@ -120,11 +120,11 @@ class BusinessConfig:
         "Tu pago fue verificado y aceptado. Tu pedido quedo registrado con el numero "
         "{numero}. Cualquier cosa, aqui estoy para ayudarte."
     )
-    # Lo que recibe el cliente cuando el supervisor NO aprueba. Es a propósito NEUTRO:
-    # el motivo real (monto distinto, comprobante ilegible, sin stock) lo explica una
-    # persona, no el bot. {numero} = pago_whatsapp, para que el cliente tenga a dónde ir.
+    # Lo que recibe el cliente cuando el supervisor NO aprueba. El MOTIVO lo escribe el
+    # supervisor (el bot se lo pide y lo reenvía tal cual): el bot no inventa razones.
+    # {motivo} = lo que escribió el supervisor · {numero} = pago_whatsapp.
     msg_rechazado: str = (
-        "No pudimos confirmar tu pedido en este momento. Por favor escribinos al "
+        "No pudimos confirmar tu pedido: {motivo}. Si tienes alguna duda escribinos al "
         "{numero} y con gusto lo resolvemos contigo."
     )
     # Lo mismo para RETIRO, donde no hubo pago: no se le puede decir "pago verificado"

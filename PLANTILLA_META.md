@@ -179,9 +179,9 @@ plantilla sale igual pero **sin la foto**.
 3. El supervisor toca:
    - **Aprobar pago** → el cliente recibe que su pago fue **verificado y aceptado**, con
      el **número** (*Cuando TÚ apruebas el pago*).
-   - **No aprobar** → el cliente recibe un aviso de que **no se pudo confirmar** su pedido y
-     que te escriba al WhatsApp de pagos, **sin el motivo** (eso lo explicás vos), y el caso
-     entra en la cola de revisión del panel.
+   - **No aprobar** → el bot te pregunta **el motivo** por WhatsApp; lo que escribas en el
+     siguiente mensaje se le manda al cliente tal cual, junto con el WhatsApp de pagos. Si
+     preferís no dar motivo, escribí `sin motivo`. El caso entra en la cola de revisión.
 
 ### Retiro en tienda (paga al retirar)
 
