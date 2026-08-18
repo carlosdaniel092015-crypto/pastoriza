@@ -136,5 +136,8 @@ SO (Web Notifications) + toast in-app; clic → abre el chat. Los assets viven b
   (product.product)** — se quitaron de `catalogo.py`. No los reintroduzcas.
 - **`OPENAI_API_KEY` se propaga a `os.environ` en `settings.py`** porque el SDK y `openai` la leen
   del entorno, no de `settings`.
+- **VPS:** `PUBLIC_BASE_URL` es OBLIGATORIA fuera de Railway (sin ella no sale la foto del
+  comprobante). Y al mudar Redis hay que COPIAR las keys (`scripts/migrar_redis.py`): ahí
+  vive la config de negocio, los prompts del panel y el CRM. Ver **`DESPLIEGUE_VPS.md`**.
 - **Docker:** el `Dockerfile` DEBE copiar `prompts/` (y `.dockerignore` tiene excepción para
   `prompts/*.md`), o los agentes quedan sin prompt en producción.

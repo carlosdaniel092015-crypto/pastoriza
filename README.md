@@ -123,6 +123,11 @@ python -m scripts.indexar_fichas
 
 Dokploy corre sobre Docker en tu VPS y trae Traefik con SSL automático.
 
+> Si estás **mudando** el bot de Railway a un VPS, seguí **`DESPLIEGUE_VPS.md`**: tiene
+> el orden de los pasos y las cuatro variables que cambian. Lo que más caro sale es
+> olvidarse de copiar Redis (`scripts/migrar_redis.py`): ahí vive la config de negocio,
+> los prompts editados y el CRM, así que sin eso el panel arranca vacío.
+
 ### Opción A — desde Git (recomendada)
 
 1. Subí este proyecto a un repo privado (GitHub/Gitea). El `.gitignore` ya
