@@ -1,11 +1,12 @@
-# Compose para Dokploy (o docker compose a secas).
+# Compose para Dokploy (o `docker compose` a secas). Bot + Redis en un solo deploy.
 #
-# En Dokploy, si creás la app como "Compose", pegá este archivo y cargá las
-# variables en la pestaña Environment. Traefik ya viene con Dokploy: sólo
-# asignás el dominio desde la UI y él pone las labels.
+# En Dokploy: Create Service -> Compose, Provider Git, este archivo, y las variables
+# en la pestaña Environment. Traefik ya viene con Dokploy: sólo asignás el dominio
+# desde la UI y él pone las labels.
 #
-# El servicio `redis` está comentado: ya tenés uno corriendo para n8n.
-# Reusalo con REDIS_URL apuntando a él y un REDIS_PREFIX distinto.
+# Ver DESPLIEGUE_VPS.md para el orden de la mudanza. Dos variables OBLIGATORIAS acá:
+#   REDIS_PASSWORD   -> la clave del Redis (el deploy falla si falta, a propósito)
+#   REDIS_URL        -> redis://:LA_MISMA_CLAVE@redis:6379/1
 
 services:
   bot:
@@ -16,6 +17,9 @@ services:
     restart: unless-stopped
     env_file:
       - .env
+    depends_on:
+      redis:
+        condition: service_healthy
     ports:
       # Sólo expuesto en localhost: el tráfico entra por Traefik o por el
       # Cloudflare Tunnel. Nunca abras esto a 0.0.0.0 en el VPS.
@@ -34,19 +38,51 @@ services:
     networks:
       - dokploy-network
 
-  # Descomentá SOLO si querés un Redis dedicado en vez de reusar el de n8n.
-  # redis:
-  #   image: redis:7-alpine
-  #   container_name: pastoriza-redis
-  #   restart: unless-stopped
-  #   command: redis-server --appendonly yes --maxmemory 256mb --maxmemory-policy noeviction
-  #   volumes:
-  #     - redis-data:/data
-  #   networks:
-  #     - dokploy-network
+  # Redis NO es sólo cache en este proyecto: acá viven la config de negocio (precios,
+  # mínimos, mensajes, los dos canales), los prompts editados desde el panel, las
+  # reglas aprendidas y el índice de conversaciones del CRM. De ahí las tres
+  # decisiones de abajo; ninguna es cosmética.
+  redis:
+    image: redis:7-alpine
+    container_name: pastoriza-redis
+    restart: unless-stopped
+    # --appendonly: sobrevive a un reinicio del VPS. Sin esto, un reboot borra la
+    #   config del negocio y el bot arranca con los defaults del código.
+    # --maxmemory-policy noeviction: si algún día se pone un tope de memoria, que
+    #   Redis RECHACE escrituras en vez de borrar keys al azar. La política por
+    #   defecto (con maxmemory puesto) borraría precios en silencio.
+    # --requirepass: sin clave, cualquier cosa en la red de Docker lo lee y lo
+    #   escribe. Ahí están los teléfonos y las conversaciones de los clientes.
+    command: >
+      redis-server
+      --appendonly yes
+      --appendfsync everysec
+      --maxmemory-policy noeviction
+      --requirepass ${REDIS_PASSWORD:?falta REDIS_PASSWORD en Environment}
+    environment:
+      # Sólo para que el healthcheck de abajo pueda autenticarse.
+      REDIS_PASSWORD: ${REDIS_PASSWORD:?falta REDIS_PASSWORD en Environment}
+    # A propósito SIN `ports`: se alcanza por nombre de servicio (`redis:6379`) desde
+    # la red de Docker. Publicarlo al VPS sería exponerlo a internet.
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      # `depends_on: service_healthy` usa esto: el bot no arranca antes que Redis.
+      test: ["CMD-SHELL", "redis-cli -a \"$$REDIS_PASSWORD\" ping | grep -q PONG"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+      start_period: 10s
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+    networks:
+      - dokploy-network
 
-# volumes:
-#   redis-data:
+volumes:
+  redis-data:
 
 networks:
   dokploy-network:
