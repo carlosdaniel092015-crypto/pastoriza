@@ -21,7 +21,7 @@ from typing import Any
 
 from app import aprobacion, media_publica
 from app.business_config import load_config
-from app.estado import encolar_revision
+from app.estado import cerrar_pedido_abierto, encolar_revision
 from app.logging_conf import get_logger
 from app.media import descargar, mime_de_url
 from app.panel import events
@@ -230,6 +230,9 @@ async def aprobar(chat_id: str, via: str = "panel") -> dict:
         }
 
     await events.guardar_aprobacion(chat_id, "aprobado", order_id)
+    # Este pedido ya se decidió: el próximo que pida el cliente es un pedido NUEVO, no
+    # más líneas encima de éste (ver estado.leer_pedido_abierto).
+    await cerrar_pedido_abierto(chat_id)
     await RedisSession(chat_id).add_items([{"role": "assistant", "content": texto}])
     await events.publicar(
         "order", chat_id, emisor=emisor, user_name=meta.get("user_name", ""),
@@ -265,6 +268,7 @@ async def rechazar(chat_id: str, motivo: str = "", via: str = "panel") -> dict:
 
     order_id = apro.get("order_id")
     await events.guardar_aprobacion(chat_id, "rechazado", order_id, motivo)
+    await cerrar_pedido_abierto(chat_id)
     await encolar_revision(
         chat_id, ["pago_rechazado"], motivo or "(sin motivo)",
         order_id, meta.get("user_name", ""),

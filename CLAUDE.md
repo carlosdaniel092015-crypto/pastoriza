@@ -87,7 +87,9 @@ cálculo sin pisarlo; vacío vuelve al automático).
 **El pago lo aprueba una PERSONA (`app/pagos.py` + `app/aprobacion.py`, ADR-013):** en ENVÍO
 `crear_pedido` NO crea nada sin comprobante y exige que cubra el total cotizado (lo compara
 `app/comprobante.py` contra `estado.leer_cotizacion`; si no se puede leer el monto NO se
-bloquea); en RETIRO no se pide comprobante. Con el pago en regla el bot
+bloquea); en RETIRO no se pide comprobante. **Un pago NO crea otro pedido:** el pedido abierto
+del chat vive 7 días (`estado.leer_pedido_abierto`) y el comprobante que llega días después se
+aplica a ÉSE, leyendo sus líneas de Odoo; se cierra al aprobar/rechazar. Con el pago en regla el bot
 crea el pedido y adjunta el comprobante, pero al cliente le dice sólo "estamos verificando"
 (lo fuerza `_sanear`, no el prompt) y el pago queda `pendiente`. Al supervisor (`ADMIN_PHONE`)
 le llega una plantilla con cliente, dirección, productos, subtotal/ITBIS/envío/total y dos

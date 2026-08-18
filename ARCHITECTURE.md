@@ -166,6 +166,13 @@ no una confirmación). En **RETIRO no se pide comprobante**: se paga en el mostr
   monto exacto puesto por el código (`cfg.msg_monto_corto`, editable por canal). Si el monto
   **no se puede leer**, no se bloquea: lo aprueba igual una persona que ve la foto, y un falso
   "no coincide" le diría a alguien que pagó bien que no pagó.
+- **Un pago se aplica al pedido que ya estaba esperando, no crea otro.** El pedido abierto del
+  chat vive 7 días en Redis (`estado.leer_pedido_abierto`) porque el cliente cotiza un viernes y
+  transfiere el lunes. Sin eso, el modelo volvía a llamar `crear_pedido` y quedaba un pedido
+  DUPLICADO y VACÍO con el comprobante adjunto al vacío (pasó: S00163 con las líneas, S00166 en
+  RD$0.00). Al adoptarlo se leen las líneas REALES de Odoo, porque `ctx.lineas` sólo tiene lo de
+  este turno y el supervisor decidiría sobre un pago viendo "(sin líneas cargadas)". Se cierra al
+  aprobar o rechazar: el siguiente pedido del cliente es uno nuevo, no más líneas encima.
 - El comprobante **sobrevive al turno** (`estado.guardar_comprobante`, 24 h) porque el cliente
   suele mandar la foto ANTES de dar la dirección: sin eso, en el turno siguiente el bot le
   volvería a pedir la foto que acaba de mandar, en loop. Se **consume** al crear el pedido —una

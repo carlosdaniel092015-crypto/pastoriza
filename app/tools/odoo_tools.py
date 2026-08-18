@@ -15,7 +15,13 @@ from agents import RunContextWrapper, function_tool
 from app import comprobante
 from app.catalogo import catalogo
 from app.context import ConversationContext
-from app.estado import consumir_comprobante, leer_comprobante, leer_cotizacion
+from app.estado import (
+    consumir_comprobante,
+    guardar_pedido_abierto,
+    leer_comprobante,
+    leer_cotizacion,
+    leer_pedido_abierto,
+)
 from app.logging_conf import get_logger
 from app.odoo import odoo
 from app.settings import settings
@@ -251,6 +257,75 @@ async def _faltante_del_comprobante(
     return falta
 
 
+async def _lineas_de_odoo(order_id: int) -> list[dict]:
+    """Las líneas que YA tiene el pedido en Odoo, para el aviso al supervisor.
+
+    Al adoptar un pedido de días atrás, `ctx.lineas` está vacío (lo llena
+    `agregar_linea_pedido` en el mismo turno), y sin esto el supervisor recibiría
+    "(sin líneas cargadas)" justo cuando tiene que decidir sobre un pago.
+    """
+    try:
+        filas = await odoo.search_read(
+            "sale.order.line",
+            [["order_id", "=", int(order_id)]],
+            ["name", "product_uom_qty", "price_unit", "price_total"],
+            limit=60,
+        )
+    except Exception as exc:  # noqa: BLE001
+        log.warning("lineas_no_leidas", order_id=order_id, error=str(exc))
+        return []
+    return [
+        {
+            "nombre": str(f.get("name") or "").split("\n")[0],
+            "cantidad": int(float(f.get("product_uom_qty") or 0)),
+            "precio": float(f.get("price_unit") or 0),
+            "total": float(f.get("price_total") or 0),
+        }
+        for f in (filas or [])
+    ]
+
+
+async def _adoptar_pedido_abierto(
+    c: ConversationContext, abierto: dict, texto_comprobante: str, url_comprobante: str
+) -> str:
+    """Aplica el pago al pedido que YA estaba esperando, en vez de crear otro."""
+    order_id = int(abierto["order_id"])
+    c.order_id = order_id
+    c.pedido_modalidad = str(abierto.get("modalidad") or "")
+    c.direccion_entrega = str(abierto.get("direccion") or "")
+
+    falta = await _faltante_del_comprobante(c, texto_comprobante)
+    if falta:
+        # Mismo criterio que al crear: un pago corto no se da por bueno. El pedido
+        # sigue abierto esperando el comprobante completo.
+        c.order_id = None
+        c.marcar_revision("comprobante_monto_corto")
+        c.comprobante_faltante = falta
+        return (
+            f"ERROR: el comprobante no cubre el total del pedido {order_id}: faltan "
+            f"RD${falta:,.2f}. Dile al cliente con amabilidad cuánto falta y pídele el "
+            "comprobante por el monto completo. NO crees otro pedido."
+        )
+
+    c.lineas = await _lineas_de_odoo(order_id)
+    c.lineas_creadas = len(c.lineas)
+    c.espera_aprobacion = True
+    c.comprobante_url = url_comprobante
+    await consumir_comprobante(c.chat_id)
+    log.info(
+        "pago_aplicado_a_pedido_existente",
+        chat_id=c.chat_id, order_id=order_id, lineas=c.lineas_creadas,
+    )
+    if not c.lineas:
+        c.marcar_revision("pedido_sin_lineas")
+    return (
+        f"OK: el pago se aplicó al pedido {order_id}, que ya existía con sus líneas. "
+        "NO crees otro pedido y NO agregues líneas: ya están cargadas. Al cliente "
+        "decile SOLO que su pago quedó en verificación y que el supervisor le confirma "
+        "en un momento."
+    )
+
+
 async def crear_pedido_impl(
     c: ConversationContext,
     modalidad: str,
@@ -297,6 +372,16 @@ async def crear_pedido_impl(
     tiene_comprobante = bool(c.es_comprobante or guardado)
     texto_comprobante = c.comprobante_texto or str(guardado.get("texto") or "")
     url_comprobante = c.imagen_url if c.es_comprobante else str(guardado.get("url") or "")
+
+    # El PAGO de un pedido que ya existe NO crea otro pedido. Caso real: cotizó el
+    # viernes (pedido S00163, con sus líneas) y transfirió el lunes; el modelo volvió a
+    # llamar acá y quedó un segundo pedido VACÍO (S00166, RD$0.00) con el comprobante
+    # adjunto al vacío. Un pago se aplica al pedido que estaba esperando, y punto.
+    abierto = await leer_pedido_abierto(c.chat_id) if tiene_comprobante else {}
+    if abierto:
+        return await _adoptar_pedido_abierto(
+            c, abierto, texto_comprobante, url_comprobante
+        )
 
     m = modalidad.lower()
     if m.startswith("env"):
@@ -354,6 +439,11 @@ async def crear_pedido_impl(
     c.pedido_modalidad = "envio" if m.startswith("env") else "retiro"
     # La dirección tal como quedó en el pedido (misma nota que se guarda en Odoo).
     c.direccion_entrega = nota.replace("ENTREGA: ", "", 1)
+    # Queda registrado como el pedido ABIERTO de este chat (7 días): si el cliente paga
+    # dentro de unos días, ese pago va a ESTE pedido y no crea otro.
+    await guardar_pedido_abierto(
+        c.chat_id, int(order_id), c.pedido_modalidad, c.direccion_entrega
+    )
     # TODO pedido lo aprueba el supervisor antes de que el cliente reciba su número
     # (ADR-013): con pago en envío, y también en retiro, donde no hay pago pero sí una
     # decisión (stock, cantidad, cliente). Esto —y no `es_comprobante`— es lo que
