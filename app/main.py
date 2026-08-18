@@ -321,10 +321,15 @@ async def _aprobar_desde_whatsapp(msg: InboundMessage) -> None:
             if not res.get("ya_estaba")
             else f"El pedido {pedido} ya estaba aprobado."
         )
+    elif res.get("enviado"):
+        aviso = (
+            f"Pedido {pedido} marcado como NO aprobado. Al cliente le avise que no se "
+            "pudo confirmar y que te escriba; el MOTIVO se lo explicas vos."
+        )
     else:
         aviso = (
-            f"Pedido {pedido} marcado como NO aprobado. Al cliente no se le dijo nada: "
-            "escribile vos con el motivo."
+            f"Pedido {pedido} marcado como NO aprobado, pero NO pude avisarle al "
+            "cliente. Escribile vos: quedo esperando."
         )
     with contextlib.suppress(Exception):
         await ycloud.avisar_admin(msg.instance_from or settings.ycloud_from, aviso)

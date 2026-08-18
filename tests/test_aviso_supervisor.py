@@ -244,12 +244,19 @@ class TestAprobarDesdeWhatsApp:
         _webhook(cliente, ADMIN, payload=f"aprobar:{CLIENTE}:160")
         assert cliente.admin and "160" in cliente.admin[0]
 
-    def test_el_boton_de_rechazo_no_le_escribe_al_cliente(self, cliente):
+    def test_el_boton_de_rechazo_le_avisa_al_cliente_sin_dar_el_motivo(self, cliente):
         _webhook(cliente, ADMIN, payload=f"rechazar:{CLIENTE}:160")
-        assert cliente.enviados == []
+        assert len(cliente.enviados) == 1
+        texto = cliente.enviados[0][2].lower()
+        assert "no pudimos confirmar" in texto and "829" in texto
+        assert "160" not in texto, "sin número: el pedido NO quedó confirmado"
         assert cliente.get("/panel/api/chats").json()["chats"][0]["aprobacion"] == (
             "rechazado"
         )
+
+    def test_y_al_supervisor_se_le_dice_que_el_motivo_lo_explica_el(self, cliente):
+        _webhook(cliente, ADMIN, payload=f"rechazar:{CLIENTE}:160")
+        assert cliente.admin and "motivo" in cliente.admin[0].lower()
 
     def test_escrito_a_mano_encuentra_el_chat_por_el_numero_de_pedido(self, cliente):
         """'aprobar 160' no trae chat_id: hay que ubicarlo por el pedido."""

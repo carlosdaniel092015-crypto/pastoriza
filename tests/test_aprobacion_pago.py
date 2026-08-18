@@ -159,15 +159,41 @@ class TestAprobacionDesdeElPanel:
             "pendiente"
         )
 
-    def test_rechazar_NO_le_escribe_al_cliente(self, cliente):
-        """Decirle a alguien que su pago no sirve lo hace una persona, no el bot."""
+    def test_rechazar_SI_le_avisa_al_cliente(self, cliente):
+        """El cliente pidió y esperó: no puede quedarse en silencio para siempre."""
         r = cliente.post("/panel/api/chats/18091112222/rechazar-pago",
                          json={"motivo": "el monto no coincide"})
-        assert r.status_code == 200
-        assert cliente.enviados == []
+        assert r.status_code == 200 and r.json()["enviado"] is True
+        assert len(cliente.enviados) == 1
         assert cliente.get("/panel/api/chats").json()["chats"][0]["aprobacion"] == (
             "rechazado"
         )
+
+    def test_pero_NO_le_dice_el_motivo(self, cliente):
+        """El motivo real lo explica una persona: el bot no acusa a nadie."""
+        cliente.post("/panel/api/chats/18091112222/rechazar-pago",
+                     json={"motivo": "el comprobante es falso"})
+        texto = cliente.enviados[0][2]
+        assert "falso" not in texto.lower()
+        assert "829" in texto, "tiene que darle a dónde escribir"
+
+    def test_si_no_se_le_pudo_avisar_igual_queda_rechazado(self, cliente, monkeypatch):
+        """El estado es lo que ve el supervisor: perderlo lo dejaría creyendo que sigue
+        pendiente después de que él ya decidió. Pero se marca que nadie le avisó."""
+        from app.ycloud import ycloud
+
+        async def _falla(*a, **kw):
+            return False
+
+        monkeypatch.setattr(ycloud, "enviar_texto", _falla)
+        r = cliente.post("/panel/api/chats/18091112222/rechazar-pago", json={})
+        assert r.status_code == 200 and r.json()["enviado"] is False
+        assert cliente.get("/panel/api/chats").json()["chats"][0]["aprobacion"] == (
+            "rechazado"
+        )
+        revision = cliente.get("/panel/api/revision").json()
+        motivos = [m for it in revision.get("items", []) for m in it.get("motivos", [])]
+        assert "cliente_sin_aviso" in motivos
 
     def test_el_pago_pendiente_sobrevive_a_que_el_asesor_responda(self, cliente):
         """Responder desde el panel reescribe el índice: no debe borrar el pendiente."""

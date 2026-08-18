@@ -255,11 +255,18 @@ async def aprobar(chat_id: str, via: str = "panel") -> dict:
 
 
 async def rechazar(chat_id: str, motivo: str = "", via: str = "panel") -> dict:
-    """Marca el pago como NO aprobado. A propósito NO le escribe nada al cliente.
+    """Marca el pedido como NO aprobado y le avisa al cliente, sin decirle por qué.
 
-    Decirle a alguien que su pago no sirve es una conversación que tiene que tener una
-    persona, con el motivo real (monto distinto, comprobante ilegible, transferencia no
-    acreditada). Queda el chat marcado y el supervisor escribe.
+    El cliente NO puede quedar en silencio: pidió, esperó, y se le dijo que estaba en
+    revisión. Antes esto no le escribía nada y el cliente quedaba esperando para siempre.
+
+    Pero el MOTIVO no se lo dice el bot: el motivo real (monto distinto, comprobante
+    ilegible, transferencia no acreditada, sin stock) es una conversación de una persona.
+    El mensaje es neutro y le da el WhatsApp del supervisor para resolverlo.
+
+    El estado se marca IGUAL aunque el aviso no salga: es lo que el supervisor ve, y
+    perderlo dejaría el pedido como pendiente después de que él ya decidió. Si no salió,
+    vuelve `enviado: False` y queda en la cola de revisión.
     """
     meta = await events.leer_chatmeta(chat_id)
     apro = meta.get("aprobacion") or {}
@@ -269,17 +276,50 @@ async def rechazar(chat_id: str, motivo: str = "", via: str = "panel") -> dict:
     order_id = apro.get("order_id")
     await events.guardar_aprobacion(chat_id, "rechazado", order_id, motivo)
     await cerrar_pedido_abierto(chat_id)
+
+    emisor = meta.get("emisor") or settings.ycloud_from
+    destino = meta.get("destino") or {"to": chat_id}
+    cfg = await load_config(emisor)
+    texto = _texto_rechazo(cfg)
+    enviado = False
+    try:
+        enviado = await ycloud.enviar_texto(destino, emisor, texto, simular_tipeo=False)
+    except Exception as exc:  # noqa: BLE001
+        log.warning("rechazo_envio_fallo", chat_id=chat_id, error=str(exc))
+    if enviado:
+        await RedisSession(chat_id).add_items([{"role": "assistant", "content": texto}])
+        await events.tocar_chatmeta(
+            chat_id, emisor=emisor, destino=destino,
+            user_name=meta.get("user_name", ""), telefono=meta.get("telefono", ""),
+            ultimo=texto, ultimo_de="bot",
+        )
+    else:
+        log.error("rechazo_no_avisado", chat_id=chat_id, order_id=order_id)
+
+    motivos = ["pago_rechazado"] if enviado else ["pago_rechazado", "cliente_sin_aviso"]
     await encolar_revision(
-        chat_id, ["pago_rechazado"], motivo or "(sin motivo)",
-        order_id, meta.get("user_name", ""),
+        chat_id, motivos, motivo or "(sin motivo)", order_id, meta.get("user_name", ""),
     )
     await events.publicar(
-        "revision", chat_id, emisor=meta.get("emisor", ""),
-        user_name=meta.get("user_name", ""), motivos=["pago_rechazado"],
-        resumen=motivo[:200] or "Pago no aprobado por el supervisor",
+        "revision", chat_id, emisor=emisor,
+        user_name=meta.get("user_name", ""), motivos=motivos,
+        resumen=motivo[:200] or "Pedido no aprobado por el supervisor",
     )
-    log.info("pago_rechazado", chat_id=chat_id, order_id=order_id, via=via)
-    return {"ok": True, "order_id": order_id}
+    log.info(
+        "pedido_rechazado",
+        chat_id=chat_id, order_id=order_id, via=via, avisado=enviado,
+    )
+    return {"ok": True, "order_id": order_id, "enviado": enviado}
+
+
+def _texto_rechazo(cfg) -> str:
+    plantilla = (cfg.msg_rechazado or "").strip()
+    numero = (cfg.pago_whatsapp or "").strip()
+    try:
+        return plantilla.format(numero=numero)
+    except (KeyError, IndexError, ValueError):
+        # Si alguien dejó una llave rara en el mensaje editable, no se pierde el aviso.
+        return f"{plantilla} ({numero})".strip()
 
 
 # ------------------------------------------- respuesta del supervisor ---
