@@ -124,9 +124,15 @@ reversible. Las reglas duras compartidas viven una sola vez en `base_comun.md`.
 ### ADR-006 · Reglas duras de negocio en código
 **Decisión:** precios corregidos contra catálogo en `agregar_linea_pedido`; **sin** herramienta
 de cancelar/eliminar (solo añadir); dirección de envío detallada exigida en `crear_pedido`;
-anti-jailbreak en `base_comun.md`.
-**Consecuencias:** la manipulación no puede cambiar precios, cancelar ni despachar producto
-equivocado, sin importar lo que "diga" el modelo.
+anti-jailbreak en `base_comun.md`. **El bot no da las cuentas bancarias:** el pago lo coordina
+el supervisor por WhatsApp (`business_config.derivar_pago`), y la garantía no es el prompt sino
+que las cuentas **no están en lo que el modelo ve** — se sacaron del bloque dinámico de
+`agents/base.py`. Lo que el modelo lee, lo puede decir; lo que no lee, no lo puede filtrar por
+más que lo presionen. El fast-path de "¿a qué cuenta transfiero?" tampoco las manda.
+**Consecuencias:** la manipulación no puede cambiar precios, cancelar, despachar producto
+equivocado ni sacarle un número de cuenta, sin importar lo que "diga" el modelo. Los datos
+bancarios siguen en la config (el panel es un lugar legítimo para guardarlos) pero ningún
+camino los emite; hay tests que lo vigilan en los dos caminos.
 
 ### ADR-007 · Resiliencia de Redis según idempotencia
 **Contexto:** Redis remoto (Redis Cloud) corta conexiones ociosas en turnos lentos.

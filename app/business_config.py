@@ -94,6 +94,14 @@ class BusinessConfig:
         "Recibi tu comprobante. Estamos verificando el pago y en un momento nuestro "
         "supervisor se comunica contigo para confirmarte. Gracias por tu paciencia."
     )
+    # EL BOT NO DA LAS CUENTAS. El pago lo maneja el supervisor por WhatsApp: eso es
+    # lo que el bot contesta cuando le preguntan dónde pagar. {numero} = pago_whatsapp.
+    pago_whatsapp: str = "+1 829 471-6701"
+    msg_pago_derivar: str = (
+        "El pago lo coordina directamente nuestro supervisor por WhatsApp al {numero}. "
+        "Escribile por ahi y te da los datos y valida tu pago. Si ya pagaste, podes "
+        "enviarme la foto del comprobante por aqui mismo y la paso a verificacion."
+    )
     # RETIRO: no hay pago que verificar, pero el pedido igual lo aprueba el supervisor,
     # así que tampoco se le da el número todavía.
     msg_pedido_en_revision: str = (
@@ -146,6 +154,21 @@ class BusinessConfig:
             return float(str(self.precio_envio).replace(",", ""))
         except ValueError:
             return 550.0
+
+
+def derivar_pago(cfg: BusinessConfig) -> str:
+    """Lo que se le contesta a quien pregunta dónde pagar. NUNCA lleva cuentas.
+
+    El bot no está autorizado a dar números de cuenta: el pago lo coordina el
+    supervisor por WhatsApp. Vive acá —y no repetido en el router y en el prompt—
+    porque es UNA regla: dos copias son dos versiones esperando divergir.
+    """
+    plantilla = (cfg.msg_pago_derivar or "").strip()
+    numero = (cfg.pago_whatsapp or "").strip()
+    try:
+        return plantilla.format(numero=numero)
+    except (KeyError, IndexError, ValueError):
+        return f"{plantilla} ({numero})".strip()
 
 
 _cache: dict[str, tuple[float, BusinessConfig]] = {}

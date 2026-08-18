@@ -30,9 +30,13 @@ class TestRespondeSolo:
         out = r("donde estan ubicados")
         assert out and CFG.direccion in out
 
-    def test_cuentas_bancarias(self):
+    def test_donde_pagar_deriva_al_supervisor_SIN_dar_cuentas(self):
+        """El bot NO está autorizado a dar cuentas: el pago lo coordina el supervisor."""
         out = r("a que cuenta transfiero")
-        assert out and CFG.banco1_cuenta in out and CFG.banco2_cuenta in out
+        assert out
+        assert CFG.banco1_cuenta not in out and CFG.banco2_cuenta not in out
+        assert CFG.cedula not in out
+        assert CFG.pago_whatsapp in out
 
     def test_costo_envio(self):
         out = r("cuanto cuesta el envio")
