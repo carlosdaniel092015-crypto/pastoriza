@@ -244,19 +244,62 @@ class TestAprobarDesdeWhatsApp:
         _webhook(cliente, ADMIN, payload=f"aprobar:{CLIENTE}:160")
         assert cliente.admin and "160" in cliente.admin[0]
 
-    def test_el_boton_de_rechazo_le_avisa_al_cliente_sin_dar_el_motivo(self, cliente):
+    def test_el_boton_de_rechazo_PIDE_el_motivo_antes_de_escribirle(self, cliente):
+        """Un aviso vacío deja al que pagó sin saber qué hacer. Primero el motivo."""
         _webhook(cliente, ADMIN, payload=f"rechazar:{CLIENTE}:160")
-        assert len(cliente.enviados) == 1
-        texto = cliente.enviados[0][2].lower()
-        assert "no pudimos confirmar" in texto and "829" in texto
-        assert "160" not in texto, "sin número: el pedido NO quedó confirmado"
+
+        assert cliente.enviados == [], "todavía no se le escribe al cliente"
+        assert cliente.admin and "motivo" in cliente.admin[0].lower()
         assert cliente.get("/panel/api/chats").json()["chats"][0]["aprobacion"] == (
             "rechazado"
-        )
+        ), "el rechazo ya quedó marcado: el supervisor decidió"
 
-    def test_y_al_supervisor_se_le_dice_que_el_motivo_lo_explica_el(self, cliente):
+    def test_y_lo_que_escribe_despues_le_llega_al_cliente_TAL_CUAL(self, cliente):
         _webhook(cliente, ADMIN, payload=f"rechazar:{CLIENTE}:160")
-        assert cliente.admin and "motivo" in cliente.admin[0].lower()
+        _webhook(cliente, ADMIN, texto="el monto transferido no coincide con el total")
+
+        assert len(cliente.enviados) == 1
+        destino, _emisor, texto = cliente.enviados[0]
+        assert destino == {"to": CLIENTE}
+        assert "el monto transferido no coincide con el total" in texto
+        assert "829" in texto
+        assert "160" not in texto, "sin número: el pedido NO quedó confirmado"
+
+    def test_sin_motivo_manda_algo_neutro(self, cliente):
+        from app.pagos import MOTIVO_NEUTRO
+
+        _webhook(cliente, ADMIN, payload=f"rechazar:{CLIENTE}:160")
+        _webhook(cliente, ADMIN, texto="sin motivo")
+        assert MOTIVO_NEUTRO in cliente.enviados[0][2]
+
+    def test_el_motivo_queda_guardado_para_el_panel(self, cliente):
+        _webhook(cliente, ADMIN, payload=f"rechazar:{CLIENTE}:160")
+        _webhook(cliente, ADMIN, texto="no tenemos stock de esa medida")
+
+        import json as _json
+
+        import app.redis_client as rc
+        from app.panel import events
+
+        meta = _json.loads(rc._pool.hashes[events.CHATMETA_KEY][CLIENTE])
+        assert meta["aprobacion"]["motivo"] == "no tenemos stock de esa medida"
+
+    def test_un_solo_motivo_por_rechazo(self, cliente, monkeypatch):
+        """Lo que escriba DESPUÉS ya no es un motivo: sigue su curso normal."""
+        import app.main as m
+
+        vistos: list = []
+
+        async def _entrante(msg):
+            vistos.append(msg)
+
+        monkeypatch.setattr(m, "manejar_entrante", _entrante)
+        _webhook(cliente, ADMIN, payload=f"rechazar:{CLIENTE}:160")
+        _webhook(cliente, ADMIN, texto="comprobante ilegible")
+        _webhook(cliente, ADMIN, texto="hola, otra cosa")
+
+        assert len(cliente.enviados) == 1, "sólo el primer motivo se le manda al cliente"
+        assert len(vistos) == 1, "el segundo mensaje va al flujo normal"
 
     def test_escrito_a_mano_encuentra_el_chat_por_el_numero_de_pedido(self, cliente):
         """'aprobar 160' no trae chat_id: hay que ubicarlo por el pedido."""

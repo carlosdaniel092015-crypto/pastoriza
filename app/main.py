@@ -279,6 +279,13 @@ async def webhook_ycloud(
         background.add_task(_aprobar_desde_whatsapp, msg)
         return JSONResponse({"ok": True, "aprobacion": True})
 
+    # El supervisor contestando el MOTIVO de un rechazo. Se decide con lo guardado en
+    # Redis (`estado.motivo_pendiente`, 30 min), no con el texto: el motivo es prosa
+    # libre y no hay forma de reconocerlo mirándolo.
+    if _es_supervisor(msg.chat_id) and msg.content.strip():
+        background.add_task(_motivo_desde_whatsapp, msg)
+        return JSONResponse({"ok": True, "posible_motivo": True})
+
     log.info(
         "entrante",
         chat_id=msg.chat_id,
@@ -321,15 +328,56 @@ async def _aprobar_desde_whatsapp(msg: InboundMessage) -> None:
             if not res.get("ya_estaba")
             else f"El pedido {pedido} ya estaba aprobado."
         )
+    elif res.get("pide_motivo"):
+        aviso = (
+            f"Pedido {pedido} marcado como NO aprobado. Cual es el motivo? Escribilo "
+            "aqui en el proximo mensaje y se lo mando al cliente tal cual. Si preferis "
+            'no dar motivo, escribi "sin motivo".'
+        )
     elif res.get("enviado"):
         aviso = (
-            f"Pedido {pedido} marcado como NO aprobado. Al cliente le avise que no se "
-            "pudo confirmar y que te escriba; el MOTIVO se lo explicas vos."
+            f"Pedido {pedido} marcado como NO aprobado y ya le avise al cliente con el "
+            "motivo."
         )
     else:
         aviso = (
             f"Pedido {pedido} marcado como NO aprobado, pero NO pude avisarle al "
             "cliente. Escribile vos: quedo esperando."
+        )
+    with contextlib.suppress(Exception):
+        await ycloud.avisar_admin(msg.instance_from or settings.ycloud_from, aviso)
+
+
+# Lo que el supervisor puede escribir para rechazar SIN dar un motivo.
+SIN_MOTIVO = {"sin motivo", "ninguno", "nada", "no", "-", "."}
+
+
+async def _motivo_desde_whatsapp(msg: InboundMessage) -> None:
+    """El motivo del rechazo que el supervisor acaba de escribir: se lo mandamos al
+    cliente TAL CUAL, y si no había ningún rechazo esperando, el mensaje sigue su curso.
+
+    Va tal cual a propósito: lo escribió una persona que sabe qué pasó. El bot no
+    reformula ni suaviza el motivo de un rechazo de dinero.
+    """
+    texto = msg.content.strip()
+    motivo = "" if texto.lower().strip(" .!") in SIN_MOTIVO else texto
+    try:
+        res = await pagos.aplicar_motivo(motivo)
+    except Exception as exc:  # noqa: BLE001
+        log.error("motivo_whatsapp_fallo", error=str(exc), exc_info=exc)
+        return
+    if res is None:
+        # No había un rechazo esperando motivo: es un mensaje cualquiera del supervisor.
+        await manejar_entrante(msg)
+        return
+
+    quien = res.get("cliente") or res.get("chat_id") or "el cliente"
+    if res.get("enviado"):
+        aviso = f"Listo, ya le mande el motivo a {quien}."
+    else:
+        aviso = (
+            f"No pude mandarle el mensaje a {quien} (puede estar fuera de la ventana de "
+            "24 h de WhatsApp). Escribile vos: quedo esperando."
         )
     with contextlib.suppress(Exception):
         await ycloud.avisar_admin(msg.instance_from or settings.ycloud_from, aviso)

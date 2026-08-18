@@ -880,11 +880,11 @@ async function aprobarPago(id){
     _chatsSig=''; await loadChats(); openChat(id);
   }catch(e){ alert('No se pudo aprobar: '+e+'\n\nEl pago sigue pendiente.'); } }
 async function rechazarPago(id){
-  const motivo=prompt('¿Por qué no es válido? (queda en Revisar; NO se le escribe nada al cliente)');
+  const motivo=prompt('¿Por qué no se aprueba? Esto se le ENVÍA al cliente tal cual, así que escribilo como querés que lo lea (ej: "el monto transferido no coincide con el total").');
   if(motivo===null)return;
   try{ await api('/chats/'+encodeURIComponent(id)+'/rechazar-pago',{method:'POST',body:JSON.stringify({motivo})});
     _chatsSig=''; await loadChats(); openChat(id);
-    showToast('rev','Pago marcado como no válido','Escribile al cliente explicándole qué pasó.');
+    showToast('rev','Pedido no aprobado','Al cliente ya se le avisó con el motivo.');
   }catch(e){ alert('No se pudo marcar: '+e); } }
 function abrirVistaHilo(){ const c=document.querySelector('.conv'); if(c)c.classList.add('show-thread'); document.body.classList.add('thread-open'); }
 function cerrarHilo(){ const c=document.querySelector('.conv'); if(c)c.classList.remove('show-thread'); document.body.classList.remove('thread-open'); }
@@ -903,7 +903,7 @@ async function openChat(id){
   $('#thead').innerHTML=`<div class="row1"><button class="backbtn" onclick="cerrarHilo()" title="Volver">‹</button><div><div class="cn">${esc(m.user_name)||esc(id)}</div><div class="cs">${esc(canal)}</div>${semHtml}</div>
     <div class="date eyebrow">Hoy · ${hoy}</div></div>
     ${fila.aprobacion==='pendiente'?(fila.con_pago===false?`<div class="comun" style="margin:10px 0 0;display:block">🏬 <b>Pedido por aprobar</b> — retiro en tienda, sin comprobante (paga al retirar). El pedido ${fila.order_id?'<b>#'+fila.order_id+'</b> ':''}ya está en Odoo. Ya se le dijo que lo estás revisando; <b>cuando apruebes</b>, el bot le confirma el número.</div>`:`<div class="comun" style="margin:10px 0 0;display:block">💵 <b>Pago por verificar</b> — el cliente mandó el comprobante y el pedido ${fila.order_id?'<b>#'+fila.order_id+'</b> ':''}quedó registrado. Ya se le dijo que estamos verificando; <b>cuando apruebes</b>, el bot le confirma el número.</div>`):''}
-    ${fila.aprobacion==='rechazado'?`<div class="comun" style="margin:10px 0 0;display:block">Pedido NO aprobado. Al cliente ya se le avisó que no se pudo confirmar y que escriba al WhatsApp del supervisor; el <b>motivo</b> se lo explicás vos.</div>`:''}
+    ${fila.aprobacion==='rechazado'?`<div class="comun" style="margin:10px 0 0;display:block">Pedido NO aprobado. Al cliente se le avisó con el motivo que escribiste y el WhatsApp del supervisor.</div>`:''}
     ${m.ad_id?`<div class="adbanner">📣 Vino del anuncio de Facebook${m.ad_producto?': '+esc(m.ad_producto):(m.ad_headline?': '+esc(m.ad_headline):'')} · ID ${esc(m.ad_id)}</div>`:''}
     <div class="acts">
       ${fila.aprobacion==='pendiente'?`<button class="abtn aprobar" onclick="aprobarPago('${id}')">✓ ${fila.con_pago===false?'Aprobar pedido':'Aprobar pago'}${fila.order_id?' #'+fila.order_id:''}</button>
