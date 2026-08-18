@@ -132,6 +132,19 @@ class TestSinCanal:
                  "ultimo_de": "cliente", "ultimo_ts": 500 + i}  # sin emisor
             )
 
+    def _viejisima_sin_indice(self, cliente, chat="18098880999"):
+        """Tan vieja que ni siquiera llegó a tener entrada en el índice del panel:
+        sólo sobrevive su `pastoriza:session:*` (caso real tras migrar de otro Redis)."""
+        import json as _json
+
+        from app.settings import settings
+
+        import app.redis_client as rc
+        rc._pool.listas[settings.key("session", chat)] = [
+            _json.dumps({"role": "user", "content": "precio de botella 8 oz"})
+        ]
+        return chat
+
     def test_van_a_su_propia_pestana_no_a_todos(self, cliente):
         self._viejas(cliente)
         d = _get(cliente, "/panel/api/chats")
@@ -199,6 +212,31 @@ class TestSinCanal:
 
     def test_asignar_una_inexistente_da_404(self, cliente):
         assert cliente.post(f"/panel/api/chats/no-existe/asignar-canal?canal={CA}").status_code == 404
+
+    def test_asignar_una_sin_indice_pero_con_sesion(self, cliente):
+        """Tan vieja que no llegó a tener entrada en el CRM: sólo su sesión. Antes del
+        fix, ni el botón individual ni el masivo la encontraban (404 / se saltaba)."""
+        chat = self._viejisima_sin_indice(cliente)
+        d = _get(cliente, "/panel/api/chats")
+        assert chat in [c["chat_id"] for c in d["chats"]]  # /api/chats ya la mostraba
+
+        r = cliente.post(f"/panel/api/chats/{chat}/asignar-canal?canal={CA}")
+        assert r.status_code == 200, r.text
+        assert r.json()["canal"] == CA
+
+        d2 = _get(cliente, "/panel/api/chats")
+        por_chat = {c["chat_id"]: c["canal"] for c in d2["chats"]}
+        assert por_chat[chat] == CA
+
+    def test_asignar_masivo_incluye_las_sin_indice(self, cliente):
+        self._viejas(cliente, 1)
+        chat_solo_sesion = self._viejisima_sin_indice(cliente, "18098880998")
+        r = cliente.post(f"/panel/api/chats/asignar-canal?canal={CB}")
+        assert r.status_code == 200, r.text
+        assert r.json()["asignadas"] == 2  # la vieja con índice + la de sólo sesión
+        d = _get(cliente, "/panel/api/chats")
+        por_chat = {c["chat_id"]: c["canal"] for c in d["chats"]}
+        assert por_chat[chat_solo_sesion] == CB
 
 
 class TestSemaforoEnLaLista:

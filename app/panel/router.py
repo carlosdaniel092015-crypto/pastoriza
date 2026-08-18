@@ -396,6 +396,12 @@ async def api_asignar_canal(
     entraron no se pueden atribuir solas (el dato no está en ninguna parte), y no se
     adivina: lo decide quien opera, que sabe con qué número venía atendiendo. Desde
     el próximo mensaje, cada conversación queda en su canal por sí sola.
+
+    Incluye también las que son TAN viejas que ni siquiera llegaron a tener una
+    entrada en el índice del panel (`pastoriza:panel:chatmeta`): sólo sobrevive su
+    `pastoriza:session:*`. `/api/chats` ya las mostraba (las arma al vuelo desde la
+    sesión), pero como acá antes sólo se recorría `meta.items()`, esas quedaban
+    huérfanas para siempre: ni el botón masivo ni el individual las encontraban.
     """
     _auth(x_panel_token)
     c = canal_id(canal)
@@ -403,9 +409,12 @@ async def api_asignar_canal(
         raise HTTPException(status_code=400, detail="indicá a qué número asignarlas")
 
     meta = await events.todos_chatmeta(estricto=True)
-    huerfanos = [cid for cid, m in meta.items() if not norm_num(str(m.get("emisor") or ""))]
+    ids = set(meta.keys()) | set(await _chat_ids_de_sesiones())
+    huerfanos = [
+        cid for cid in ids if not norm_num(str(meta.get(cid, {}).get("emisor") or ""))
+    ]
     for cid in huerfanos:
-        m = dict(meta[cid])
+        m = dict(meta.get(cid, {}))
         m["emisor"] = c
         m.setdefault("destino", {"to": cid})
         try:
@@ -431,7 +440,13 @@ async def api_asignar_canal_uno(
 ) -> dict:
     """Igual que /api/chats/asignar-canal pero para UNA sola conversación: cuando
     entre el operador quiere repartirlas a mano, número por número, en vez de mandar
-    todas las huérfanas al mismo canal."""
+    todas las huérfanas al mismo canal.
+
+    Si la conversación es tan vieja que nunca tuvo entrada en el índice del panel
+    (sólo sobrevive su `pastoriza:session:*`), se crea una ahora: `/api/chats` ya la
+    mostraba igual (la arma al vuelo desde la sesión), así que 404 acá sería
+    contradecir lo que el operador está viendo en pantalla.
+    """
     _auth(x_panel_token)
     c = canal_id(canal)
     if not c:
@@ -439,9 +454,9 @@ async def api_asignar_canal_uno(
 
     meta = await events.todos_chatmeta(estricto=True)
     m = meta.get(chat_id)
-    if m is None:
+    if m is None and chat_id not in await _chat_ids_de_sesiones():
         raise HTTPException(status_code=404, detail="conversación no encontrada")
-    m = dict(m)
+    m = dict(m or {})
     m["emisor"] = c
     m.setdefault("destino", {"to": chat_id})
     try:
