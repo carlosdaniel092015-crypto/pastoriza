@@ -32,6 +32,41 @@ def _saltar(key: str) -> bool:
     return resto.startswith(SALTAR)
 
 
+async def _copiar_por_tipo(src: aioredis.Redis, dst: aioredis.Redis, raw: bytes) -> None:
+    """Fallback cuando DUMP/RESTORE falla (típico migrando desde Redis Cloud/Enterprise:
+    el proxy devuelve el DUMP en un formato binario que un Redis OSS no siempre puede
+    RESTORE-ar, aunque las versiones sean compatibles). Copia con comandos normales,
+    tipo por tipo, en vez de binario."""
+    tipo = await src.type(raw)
+    tipo = tipo.decode() if isinstance(tipo, bytes) else tipo
+    if tipo == "none":  # expiró entre el scan y esta lectura
+        return
+    if tipo != "string":
+        await dst.delete(raw)  # para que --si se pueda correr dos veces sin duplicar
+    if tipo == "string":
+        valor = await src.get(raw)
+        if valor is not None:
+            await dst.set(raw, valor)
+    elif tipo == "hash":
+        campos = await src.hgetall(raw)
+        if campos:
+            await dst.hset(raw, mapping=campos)
+    elif tipo == "list":
+        elementos = await src.lrange(raw, 0, -1)
+        if elementos:
+            await dst.rpush(raw, *elementos)
+    elif tipo == "set":
+        miembros = await src.smembers(raw)
+        if miembros:
+            await dst.sadd(raw, *miembros)
+    elif tipo == "zset":
+        pares = await src.zrange(raw, 0, -1, withscores=True)
+        if pares:
+            await dst.zadd(raw, dict(pares))
+    else:
+        raise ValueError(f"tipo no soportado: {tipo}")
+
+
 async def migrar(origen: str, destino: str, aplicar: bool, patron: str) -> int:
     try:
         src = aioredis.from_url(origen, decode_responses=False)
@@ -77,6 +112,19 @@ async def migrar(origen: str, destino: str, aplicar: bool, patron: str) -> int:
             # replace=True: se puede correr dos veces sin duplicar ni fallar.
             await dst.restore(raw, ttl if ttl and ttl > 0 else 0, valor, replace=True)
             copiadas += 1
+            continue
+        except Exception as exc:  # noqa: BLE001
+            if "dump payload" not in str(exc).lower():
+                fallidas += 1
+                print(f"  FALLÓ {key}: {exc}")
+                continue
+            # Típico migrando desde Redis Cloud/Enterprise: reintentar sin binario.
+
+        try:
+            await _copiar_por_tipo(src, dst, raw)
+            if ttl and ttl > 0:
+                await dst.pexpire(raw, ttl)
+            copiadas += 1
         except Exception as exc:  # noqa: BLE001
             fallidas += 1
             print(f"  FALLÓ {key}: {exc}")
@@ -91,9 +139,9 @@ async def migrar(origen: str, destino: str, aplicar: bool, patron: str) -> int:
         print("\nEsto fue una PRUEBA. Agregá --si para copiar de verdad.")
     elif fallidas:
         print(
-            "\nOJO: hubo fallas. Suele ser que el Redis DESTINO es más VIEJO que el "
-            "origen (DUMP/RESTORE no es compatible hacia atrás). Usá una imagen igual "
-            "o más nueva."
+            "\nOJO: hubo fallas incluso con el copiado por tipo (fallback). Revisá el "
+            "detalle de cada 'FALLÓ' arriba: puede ser un tipo de dato no soportado o "
+            "un problema de conexión/permisos puntual en esa key."
         )
     return 1 if fallidas else 0
 
