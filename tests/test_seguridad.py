@@ -4,11 +4,15 @@
 2. El bot no puede enviar la foto de un producto que no salió de una tool
    en ESTE turno (adiós al "no reutilices la imagen de un turno anterior"
    escrito en el prompt y cruzando los dedos).
+3. El bot no puede dar las cuentas bancarias: no las tiene a la vista.
 """
 from __future__ import annotations
 
+import pytest
+
 from app.business_config import BusinessConfig
 from app.catalogo import Producto
+from app.matching import quitar_tildes
 from app.context import ConversationContext
 from app.pipeline import _resolver_fotos, _sanear
 from app.settings import settings
@@ -127,3 +131,78 @@ class TestTroceo:
 
     def test_vacio(self):
         assert YCloud.trocear("   ") == []
+
+
+class TestNoDaLasCuentas:
+    """El bot NO está autorizado a dar números de cuenta.
+
+    Regla del negocio, textual: "el bot no tiene permitido dar las cuentas a los
+    clientes; todos los pagos se deben hacer vía WhatsApp al 829-471-6701".
+
+    Se protege por CÓDIGO en los dos caminos por los que una cuenta podría salir:
+      1. la respuesta enlatada del fast-path (app/router.py), y
+      2. lo que el modelo VE — si está en el prompt, lo puede decir.
+    """
+
+    def _cfg(self):
+        from app.business_config import BusinessConfig
+
+        return BusinessConfig()
+
+    def _secretos(self, cfg) -> list[str]:
+        return [cfg.banco1_cuenta, cfg.banco2_cuenta, cfg.cedula]
+
+    @pytest.mark.parametrize("pregunta", [
+        "a que cuenta transfiero",
+        "cual es el numero de cuenta",
+        "a que banco deposito",
+        "datos de pago",
+        "para pagar",
+        "donde deposito",
+    ])
+    def test_el_fast_path_nunca_las_manda(self, pregunta):
+        from app.router import respuesta_directa
+
+        cfg = self._cfg()
+        out = respuesta_directa(pregunta, cfg) or ""
+        for secreto in self._secretos(cfg):
+            assert secreto not in out, f"se filtró {secreto} en: {out}"
+
+    def test_y_manda_al_whatsapp_del_supervisor(self):
+        from app.router import respuesta_directa
+
+        cfg = self._cfg()
+        out = respuesta_directa("a que cuenta transfiero", cfg) or ""
+        assert cfg.pago_whatsapp in out
+
+    def _instrucciones(self, agente: str) -> tuple[str, object]:
+        from dataclasses import dataclass as _dc
+
+        from app.agents.base import armar_instrucciones
+        from app.context import ConversationContext
+
+        cfg = self._cfg()
+
+        @_dc
+        class _Wrapper:
+            context: ConversationContext
+
+        ctx = ConversationContext(
+            chat_id="1809", telefono="1809", user_name="X", emisor="18099221092",
+            destino={"to": "1809"}, cfg=cfg,
+        )
+        return armar_instrucciones(agente)(_Wrapper(ctx), None), cfg
+
+    @pytest.mark.parametrize("agente", ["ventas", "pedido", "soporte"])
+    def test_las_cuentas_NO_estan_en_lo_que_ve_el_modelo(self, agente):
+        """Lo que el modelo lee, lo puede decir: la cuenta no puede estar en el prompt."""
+        texto, cfg = self._instrucciones(agente)
+        for secreto in self._secretos(cfg):
+            assert secreto not in texto, f"{agente} ve {secreto}"
+        assert cfg.pago_whatsapp in texto, f"{agente} no sabe a dónde mandarlo"
+
+    def test_el_prompt_le_prohibe_darlas(self):
+        texto, _cfg = self._instrucciones("pedido")
+        bajo = texto.lower()
+        assert "no estas autorizada" in quitar_tildes(bajo)
+        assert "nunca inventes una cuenta" in bajo

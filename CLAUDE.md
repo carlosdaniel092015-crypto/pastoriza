@@ -84,6 +84,12 @@ agregás hitos, agregalos a `PESOS` y NO agregues nada que castigue al mayorista
 regatear, preguntar mucho). El supervisor puede **moverlo a mano** (`sem_manual`: gana sobre el
 cálculo sin pisarlo; vacío vuelve al automático).
 
+**El bot NO da las cuentas (ADR-006):** el pago lo coordina el supervisor por WhatsApp
+(`business_config.derivar_pago`, número y mensaje editables por canal). La garantía no es el
+prompt: las cuentas NO están en el bloque dinámico de `agents/base.py`, así que el modelo no
+las ve y no las puede filtrar. El fast-path de "¿a qué cuenta transfiero?" tampoco las manda.
+Siguen en la config para tu referencia, pero ningún camino las emite (`tests/test_seguridad.py`).
+
 **El pago lo aprueba una PERSONA (`app/pagos.py` + `app/aprobacion.py`, ADR-013):** en ENVÍO
 `crear_pedido` NO crea nada sin comprobante y exige que cubra el total cotizado (lo compara
 `app/comprobante.py` contra `estado.leer_cotizacion`; si no se puede leer el monto NO se

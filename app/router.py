@@ -9,7 +9,7 @@ from __future__ import annotations
 import random
 import re
 
-from app.business_config import BusinessConfig
+from app.business_config import BusinessConfig, derivar_pago
 from app.matching import quitar_tildes
 
 SALUDOS = [
@@ -194,14 +194,13 @@ def respuesta_directa(
         )
 
     if RE_CUENTAS.search(norm):
+        # El bot NO da números de cuenta: el pago lo maneja el supervisor por WhatsApp
+        # (regla del negocio). Antes esta respuesta los mostraba, y además prometía
+        # "te confirmo el pedido", que tampoco puede cumplir: eso lo aprueba una persona.
         return (
             f"Formas de pago: {cfg.formas_pago}.\n"
             f"Pedido minimo: RD${cfg.monto_minimo}.\n\n"
-            f"Para transferencia o deposito:\n"
-            f"{cfg.banco1_nombre} - Cta {cfg.banco1_cuenta}\n"
-            f"{cfg.banco2_nombre} - Cta {cfg.banco2_cuenta}\n"
-            f"({cfg.titular}, {cfg.cedula})\n\n"
-            "Cuando pagues, enviame la foto del comprobante y te confirmo el pedido."
+            f"{derivar_pago(cfg)}"
         )
 
     if RE_DIRECCION.search(norm):

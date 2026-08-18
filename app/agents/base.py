@@ -10,6 +10,7 @@ from __future__ import annotations
 from agents import Agent, ModelSettings, RunContextWrapper
 from pydantic import BaseModel, Field
 
+from app.business_config import derivar_pago
 from app.context import ConversationContext
 
 
@@ -33,8 +34,13 @@ class RespuestaBot(BaseModel):
 
 
 def _bloque_dinamico(c: ConversationContext) -> str:
-    """Datos que dependen de la config/estado del turno (no van en los .md)."""
+    """Datos que dependen de la config/estado del turno (no van en los .md).
+
+    Las CUENTAS BANCARIAS no entran acá a propósito: lo que el modelo ve, lo puede
+    decir. El pago lo coordina el supervisor por WhatsApp (ver `derivar_pago`).
+    """
     cfg = c.cfg
+    derivar = derivar_pago(cfg)
     partes = [
         f"""# DATOS DE LA TIENDA
 Dirección: {cfg.direccion}
@@ -47,10 +53,11 @@ Nota de envío: {cfg.nota_envio}
 {cfg.nota_botellon}.
 Si no tienes un dato: "Para esa información contáctanos al +1 829 471-6701."
 
-# CUENTAS PARA TRANSFERENCIA (mostrarlas sólo tras confirmar el pedido)
-{cfg.banco1_nombre} - Cta {cfg.banco1_cuenta}
-{cfg.banco2_nombre} - Cta {cfg.banco2_cuenta}
-({cfg.titular}, {cfg.cedula})
+# EL PAGO NO LO MANEJAS TÚ (regla dura)
+NO tienes los números de cuenta y NO estás autorizada a darlos. Si te preguntan dónde
+pagar, a qué cuenta transferir, los datos del banco o el RNC, contesta EXACTAMENTE esto:
+"{derivar}"
+Nunca inventes una cuenta, un banco ni un titular, ni digas que se los vas a enviar.
 
 # PAGO Y MÍNIMO (regla de negocio)
 Pedido MÍNIMO: RD${cfg.monto_minimo}. INFÓRMALO tú, sin que te lo pregunten, apenas
