@@ -75,6 +75,17 @@ RE_CLAIM_PEDIDO = re.compile(
     re.IGNORECASE,
 )
 
+# El prompt le pide al modelo no usar markdown (WhatsApp no lo renderiza), pero es una
+# instrucción, no una garantía: a veces igual escribe **negrita** o un encabezado con
+# #. Se corrige acá, en vez de confiar en que el modelo nunca se equivoque.
+RE_NEGRITA_MD = re.compile(r"\*\*(.+?)\*\*")
+RE_ENCABEZADO_MD = re.compile(r"^#{1,6}[ \t]+", re.MULTILINE)
+
+
+def _limpiar_markdown(mensaje: str) -> str:
+    mensaje = RE_NEGRITA_MD.sub(r"*\1*", mensaje)  # **negrita** -> *negrita* (WhatsApp)
+    return RE_ENCABEZADO_MD.sub("", mensaje)  # "### Título" -> "Título"
+
 
 # --------------------------------------------------------------- entrada ---
 async def manejar_entrante(msg: InboundMessage) -> None:
@@ -675,7 +686,7 @@ def _sanear(mensaje: str, ctx: ConversationContext) -> str:
     2. Si el comprobante no cubre el total, se le dice el monto EXACTO que falta.
     3. Sin pedido real, no se deja pasar una confirmación de pedido.
     """
-    mensaje = (mensaje or "").strip()
+    mensaje = _limpiar_markdown((mensaje or "").strip())
     if ctx.comprobante_faltante > 0:
         # No hay pedido (la tool lo bloqueó). Lo que falta es un dato de la tool, no
         # algo que el modelo pueda redactar mal — y además su texto caería en la

@@ -68,6 +68,29 @@ class TestNoConfirmarPedidosFalsos:
         assert _sanear("", ctx_nuevo()) == ""
 
 
+class TestSinMarkdown:
+    """WhatsApp no renderiza markdown de verdad: el prompt le pide al modelo no
+    usarlo, pero como es una instrucción y no una garantía, a veces igual escribe
+    **negrita** o un encabezado con #. Se corrige acá, no se confía en el prompt."""
+
+    def test_negrita_doble_asterisco_se_convierte_a_la_de_whatsapp(self):
+        c = ctx_nuevo()
+        out = _sanear("Aquí tienes **Fardos de 16 oz:** y más info.", c)
+        assert "**" not in out
+        assert "*Fardos de 16 oz:*" in out
+
+    def test_encabezado_markdown_se_saca(self):
+        c = ctx_nuevo()
+        out = _sanear("### Fardos de 16 oz\nOpción 1: RD$16.87", c)
+        assert not out.startswith("#")
+        assert out.startswith("Fardos de 16 oz")
+
+    def test_mensaje_sin_markdown_pasa_intacto(self):
+        c = ctx_nuevo()
+        texto = "Tenemos la botella lisa de 8 oz a RD$5.87. Cuántas necesitas?"
+        assert _sanear(texto, c) == texto
+
+
 class TestNoInventarFotos:
     def test_solo_productos_ofrecidos_este_turno(self):
         c = ctx_nuevo()
