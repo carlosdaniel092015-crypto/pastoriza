@@ -87,6 +87,59 @@ class TestRegistrarUso:
         await uso.registrar("ventas", UsageFalso(1, 1, 2, 1), 10)  # no debe levantar
 
 
+class TestRegistrarUsoDelPipeline:
+    """El pipeline llama a `_registrar_uso` POSICIONALMENTE con 5 argumentos. Sin un
+    test que lo ejercite, un cambio de firma explota en producción y sólo se ve en el
+    log de un cliente real (pasó: "takes from 3 to 4 positional arguments but 5 were
+    given"). Los tests de `uso.registrar` no alcanzan: probaban el módulo, no la unión.
+    """
+
+    @pytest.mark.asyncio
+    async def test_la_firma_aguanta_la_llamada_del_pipeline(self, fake):
+        from app import pipeline
+        from app.panel import uso
+
+        class ResultFalso:
+            class context_wrapper:  # noqa: N801
+                usage = UsageFalso(500, 100, 600, 2)
+
+        # EXACTAMENTE como lo llama _correr_agente: 5 posicionales.
+        await pipeline._registrar_uso("ventas", ResultFalso(), 1234.5, "18091112222", "gpt-4o-mini")
+
+        d = await uso.resumen(1)
+        assert d["total"]["turnos"] == 1
+        assert d["total"]["tokens_total"] == 600
+        # Y el modelo llega hasta Redis: si se queda en el camino, el coste sale "—".
+        assert d["por_agente"]["ventas"]["modelo"] == "gpt-4o-mini"
+        assert d["por_agente"]["ventas"]["costo_usd"] > 0
+        assert (await uso.por_chat("18091112222"))["total"]["turnos"] == 1
+
+    @pytest.mark.asyncio
+    async def test_sin_usage_no_explota(self, fake):
+        """Un result sin usage (SDK que no lo reporta) no puede tumbar el turno."""
+        from app import pipeline
+
+        class SinUsage:
+            pass
+
+        await pipeline._registrar_uso("ventas", SinUsage(), 10.0, "1809", "gpt-4o")
+
+    @pytest.mark.asyncio
+    async def test_un_fallo_al_registrar_no_tumba_el_turno(self, fake, monkeypatch):
+        from app import pipeline
+        from app.panel import uso
+
+        class ResultFalso:
+            class context_wrapper:  # noqa: N801
+                usage = UsageFalso(1, 1, 2, 1)
+
+        async def _explota(*a, **kw):
+            raise RuntimeError("redis caido")
+
+        monkeypatch.setattr(uso, "registrar", _explota)
+        await pipeline._registrar_uso("ventas", ResultFalso(), 1.0, "1809", "gpt-4o")
+
+
 class TestEndpointUso:
     def test_devuelve_el_resumen(self, cliente, fake):
         import asyncio
