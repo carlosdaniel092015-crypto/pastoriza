@@ -110,6 +110,18 @@ de alta las plantillas en Meta una vez: **`PLANTILLA_META.md`** tiene el texto e
 texto cambia, rehacé los topes de `MAX_*` en `aprobacion.py` (el cuerpo no pasa de 1024). El comprobante se republica en `/panel/media/...`
 (`app/media_publica.py`) porque las URLs de YCloud exigen `X-API-Key` y Meta no puede bajarlas.
 
+**Media del cliente (`app/panel/media_chat.py`):** el hilo del panel guarda el TEXTO que
+se le pasó al modelo (transcripción del audio, análisis visual de la foto), así que una foto
+se veía como `## ANALISIS VISUAL: TIPO_ENVASE: Botella...` y una nota de voz sólo como su
+transcripción — imposible juzgar si el bot entendió bien. Ahora se guarda una copia del
+archivo **a DISCO** (volumen `media-data:/srv/media`), NO a Redis: ahí vive la config del
+negocio con `noeviction` y llenarla de fotos haría FALLAR escrituras reales. El índice
+(`pastoriza:panel:media:<chat_id>`, TTL 7 días como la sesión) sí va a Redis. Se sirve por
+`GET /api/media/{token}` **con** `PANEL_TOKEN` (a diferencia de `/panel/media/...`, que es sin
+auth porque ahí entra Meta): son fotos de clientes y comprobantes. La UI lo baja por `fetch`
++ blob porque un `<img src>` no puede mandar el header. `limpiar_viejos()` corre al arrancar:
+el TTL de Redis vence la ENTRADA, no el ARCHIVO.
+
 **Uso / observabilidad (`app/panel/uso.py`, módulo **07 Uso**):** tokens gastados y latencia por
 día y por agente. Se acumula con `HINCRBY` en una key por día (`pastoriza:panel:uso:<fecha>`, TTL
 45 días) en vez de un evento por turno: con cientos de turnos diarios eso sería una lista sin
