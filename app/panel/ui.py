@@ -157,8 +157,14 @@ PANEL_HTML = r"""<!doctype html>
   .medts{font-family:var(--mono);font-size:10.5px;color:var(--mut);margin-top:4px}
   .medpie{font-size:11px;color:var(--mut);line-height:1.35;margin-top:3px;
     overflow:hidden;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical}
-  .vozlbl{display:block;font-size:11px;color:var(--mut);margin-bottom:2px}
-  .voztxt{display:block;font-style:italic}
+  .vozlbl{display:block;font-size:11px;color:var(--mut);margin-bottom:3px}
+  .voztxt{display:block;font-style:italic;margin-top:4px}
+  /* El audio y la foto van DENTRO de la burbuja del mensaje: es donde se los busca
+     para comparar con lo que el bot dijo que entendió. */
+  .vozaud{display:block;width:100%;max-width:260px;height:32px;margin:2px 0}
+  .fotomsg{display:block;max-width:230px;max-height:230px;width:auto;border-radius:5px;
+    margin:6px 0 2px;cursor:zoom-in;border:1px solid var(--line)}
+  .fotomsg:hover{opacity:.9}
   /* MODULO "AL SUPERVISOR": lo que el bot le manda al ADMIN_PHONE. */
   .stat.sup{cursor:pointer}
   .stat.sup:hover b{text-decoration:underline}
@@ -1153,8 +1159,13 @@ async function openChat(id){
   for(const it of curItems){ const c=contenidoStr(it.content); if(c.trim().startsWith('{')){ try{ (JSON.parse(c).mostrar_productos||[]).forEach(x=>ids.add(x)); }catch(e){} } }
   prodMap={};
   if(ids.size){ try{ const pr=await api('/productos?ids='+[...ids].join(',')); (pr.productos||[]).forEach(p=>prodMap[p.id]=p); }catch(e){} }
+  // limpiarBlobs ANTES de pintar: si va después, revoca las URLs que se acaban de
+  // asignar y la foto queda en blanco. pintarMedia va al final porque necesita saber
+  // qué archivos ya quedaron dentro de un mensaje.
+  limpiarBlobs();
   renderMsgs(curItems);
-  limpiarBlobs(); pintarMedia();
+  pintarMedia();
+  cargarBlobs();
 }
 function contenidoStr(c){ if(c==null) return ''; if(Array.isArray(c)) return c.map(x=>(x&&(x.text||x.content))||'').join(' '); if(typeof c!=='string'){ try{ return JSON.stringify(c)||''; }catch(e){ return ''; } } return c; }
 // El hilo guarda el TEXTO que se le pasó al modelo, no el archivo. Con la foto
@@ -1162,32 +1173,85 @@ function contenidoStr(c){ if(c==null) return ''; if(Array.isArray(c)) return c.m
 // el bot entendió bien lo que le mandaron, así que la foto real va aparte, arriba.
 // Se baja por fetch (no <img src>) porque la ruta pide el token del panel en un header
 // y una etiqueta <img> no puede mandarlo: son fotos de clientes y comprobantes.
+// La tira de arriba queda SÓLO para lo que no se pudo casar con ningún mensaje del
+// hilo: la foto y el audio se ven dentro del mensaje, que es donde el operador los
+// busca. Pero un archivo huérfano no se puede esconder — si no aparece en ninguna
+// parte, parece que el cliente nunca lo mandó.
 async function pintarMedia(){
   const el=$('#mediastrip'); if(!el) return;
-  if(!curMedia.length){ el.innerHTML=''; el.style.display='none'; return; }
+  const sueltos=curMedia.filter(m=>!_medUsados.has(m.token));
+  if(!sueltos.length){ el.innerHTML=''; el.style.display='none'; return; }
   el.style.display='block';
-  const n=curMedia.length;
-  el.innerHTML='<div class="medh">'+n+' archivo(s) que mandó el cliente</div>'+
-    '<div class="medrow">'+curMedia.map((m,i)=>{
+  el.innerHTML='<div class="medh">'+sueltos.length+' archivo(s) sin mensaje asociado</div>'+
+    '<div class="medrow">'+sueltos.map(m=>{
       const pie=m.texto?`<div class="medpie" title="${esc(m.texto)}">${esc(m.texto.slice(0,90))}</div>`:'';
       const cuerpo=m.tipo==='audio'
-        ? `<audio controls preload="none" id="med${i}"></audio>`
-        : `<img id="med${i}" alt="foto del cliente" loading="lazy">`;
+        ? `<audio controls preload="none" data-med="${esc(m.token)}"></audio>`
+        : `<img data-med="${esc(m.token)}" alt="foto del cliente" loading="lazy" onclick="abrirMedia('${esc(m.token)}')">`;
       return `<div class="medit">${cuerpo}<div class="medts">${fmtTime(m.ts)}</div>${pie}</div>`;
     }).join('')+'</div>';
-  // Un blob por archivo: se revoca al cambiar de chat para no filtrar memoria.
-  curMedia.forEach(async (m,i)=>{
+  cargarBlobs();
+}
+// Ver la foto en grande: en la burbuja va chica para no romper el hilo.
+function abrirMedia(token){
+  const url=_blobs[token]; if(!url) return;
+  window.open(url,'_blank');
+}
+// Un blob por ARCHIVO (cacheado por token): el mismo audio se muestra en la tira de
+// arriba y dentro del mensaje, y bajarlo dos veces sería tirar ancho de banda.
+let _blobs={};
+function limpiarBlobs(){
+  Object.values(_blobs).forEach(u=>{ try{ URL.revokeObjectURL(u); }catch(e){} });
+  _blobs={};
+}
+// Se resuelve por `data-med` (el token) y no por id, así sirve igual a la tira y a los
+// mensajes, y no importa cuál se pinte primero.
+function cargarBlobs(){
+  document.querySelectorAll('[data-med]').forEach(async nodo=>{
+    const token=nodo.getAttribute('data-med');
+    if(!token || nodo.src) return;
+    if(_blobs[token]){ nodo.src=_blobs[token]; return; }
     try{
-      const r=await fetch('/panel/api/media/'+encodeURIComponent(m.token),{headers:headers()});
+      const r=await fetch('/panel/api/media/'+encodeURIComponent(token),{headers:headers()});
       if(!r.ok) return;
-      const url=URL.createObjectURL(await r.blob());
-      _blobs.push(url);
-      const nodo=$('#med'+i); if(nodo) nodo.src=url;
+      _blobs[token]=URL.createObjectURL(await r.blob());
+      // Puede haber más de un nodo con el mismo token (tira + mensaje).
+      document.querySelectorAll('[data-med="'+token+'"]').forEach(n=>{ n.src=_blobs[token]; });
     }catch(e){}
   });
 }
-let _blobs=[];
-function limpiarBlobs(){ _blobs.forEach(u=>{ try{ URL.revokeObjectURL(u); }catch(e){} }); _blobs=[]; }
+// Empareja un archivo con el mensaje del hilo. El índice guarda la transcripción (o el
+// análisis visual) que se le pasó al modelo, y ese mismo texto está en el mensaje: por
+// eso se puede casar sin guardar el token dentro del historial (que iría al modelo).
+let _medUsados=new Set();
+function _norm(t){ return (t||'').replace(/\s+/g,' ').trim().toLowerCase(); }
+function buscarMedia(tipo, texto){
+  const clave=_norm(texto);
+  for(const m of curMedia){
+    if(m.tipo!==tipo || _medUsados.has(m.token)) continue;
+    const guardado=_norm(m.texto);
+    // Sin texto de referencia (una segunda foto que el modelo no analizó) se casa por
+    // tipo y orden: es la única pista que hay, y es mejor que dejarla huérfana.
+    if(!guardado || !clave){
+      if(!guardado && !clave){ _medUsados.add(m.token); return m; }
+      continue;
+    }
+    // `texto` guardado está truncado a 400 caracteres: se compara por el arranque.
+    const corto=guardado.slice(0,80);
+    if(clave.startsWith(corto) || guardado.startsWith(clave.slice(0,80))){
+      _medUsados.add(m.token);
+      return m;
+    }
+  }
+  return null;
+}
+function reproductorAudio(m){
+  return m ? `<audio class="vozaud" controls preload="none" data-med="${esc(m.token)}"></audio>` : '';
+}
+function fotoEnBurbuja(m){
+  return m ? `<img class="fotomsg" data-med="${esc(m.token)}" alt="foto que mandó el cliente"
+    loading="lazy" title="Click para verla en grande" onclick="abrirMedia('${esc(m.token)}')">` : '';
+}
 // El andamiaje que el bot le pone al prompt ("# EL CLIENTE ENVIO UNA IMAGEN",
 // "## ANALISIS VISUAL:") es para el modelo, no para quien lee el hilo: se muestra
 // como etiqueta y no como texto crudo con almohadillas.
@@ -1200,6 +1264,9 @@ function limpiarAndamiaje(t){
 }
 function renderMsgs(items){
   const el=$('#msgs');
+  // Se re-arma en cada pintada: si no, al reabrir el chat todos los archivos quedarían
+  // marcados como usados y no se mostraría ninguno.
+  _medUsados=new Set();
   if(!items||!items.length){ el.innerHTML='<div class="empty">Sin mensajes.</div>'; return; }
   el.innerHTML=items.map(it=>{
     const tipo=it.type||'';
@@ -1209,10 +1276,22 @@ function renderMsgs(items){
     const acc=idx>=0?`<span class="msgacc"><button title="Corregir en el historial" onclick="editarMsg(${idx})">✎</button><button title="Borrar del historial" onclick="borrarMsg(${idx})">×</button></span>`:'';
     if(role==='user'){
       // <audio>transcripción</audio> es cómo el bot le marca al modelo que eso vino de
-      // una nota de voz. En el hilo se muestra como tal, no como una etiqueta suelta.
+      // una nota de voz. En el hilo va el AUDIO de verdad, con su transcripción debajo:
+      // sin escucharlo no se puede saber si Whisper entendió bien.
       let cuerpo=esc(limpiarAndamiaje(raw)).replace(
         /&lt;audio&gt;([\s\S]*?)&lt;\/audio&gt;/g,
-        '<span class="vozlbl">🎤 Nota de voz · lo que se entendió</span><span class="voztxt">$1</span>');
+        (_m, txt)=>{
+          const med=buscarMedia('audio', txt);
+          return `<span class="vozlbl">🎤 Nota de voz${med?'':' · lo que se entendió'}</span>`+
+            reproductorAudio(med)+`<span class="voztxt">${txt}</span>`;
+        });
+      // La foto va donde el hilo dice que llegó una foto, no en una tira aparte: ahí es
+      // donde se la busca para comparar con lo que el bot dijo que vio.
+      if(/EL CLIENTE ENVIO UNA IMAGEN/i.test(raw)){
+        const analisis=(raw.split(/##\s*ANALISIS VISUAL:/i)[1]||'').split('[')[0];
+        const med=buscarMedia('imagen', analisis);
+        if(med) cuerpo=cuerpo.replace('📷 Mandó una foto', '📷 Mandó una foto'+fotoEnBurbuja(med));
+      }
       return `<div class="row l"><div class="bub user">${cuerpo}${acc}</div><div class="btime">${fmtTime(it.ts)}</div></div>`;
     }
     let msg=raw,chips=[],escal=false,sup=false;
