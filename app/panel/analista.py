@@ -146,8 +146,19 @@ async def _analizar_canal(
 
     # Aviso a Telegram: resumen + una tarjeta por sugerencia con botones Aprobar/Rechazar.
     # Se dice de QUÉ número salieron: al aprobarlas se aplican sólo a ese canal.
+    #
+    # Con `telegram_solo_alertas` (el default) esto NO se manda: el analista corre cada
+    # 24h y una tarjeta por sugerencia convierte a Telegram en un feed que se ignora, y
+    # entonces también se ignoran los errores de verdad. Las sugerencias no son urgentes
+    # y siguen enteras en el panel → Aprendizaje.
     de_quien = f" del número {formatear(canal)}" if canal else ""
-    if pendientes and telegram.configurado():
+    if settings.telegram_solo_alertas:
+        log.info(
+            "analista_sin_aviso_telegram",
+            pendientes=len(pendientes), auto=auto,
+            detalle="telegram_solo_alertas=True: las sugerencias quedan en el panel",
+        )
+    elif pendientes and telegram.configurado():
         await telegram.enviar(
             f"🧠 Analista: {len(pendientes)} sugerencia(s){de_quien} para revisar. "
             "Apruébalas o recházalas aquí abajo (o en el panel → Aprendizaje)."
