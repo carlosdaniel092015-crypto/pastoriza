@@ -10,6 +10,7 @@ from __future__ import annotations
 import asyncio
 import base64
 import re
+import time
 import traceback
 
 from agents import MaxTurnsExceeded, Runner
@@ -35,6 +36,7 @@ from app.media import analizar_imagen, descargar, mime_de_url, transcribir_audio
 from app.models import InboundMessage, parse_message_updated, ubicacion_a_texto
 from app.odoo import odoo
 from app.panel import events as panel_events
+from app.panel import uso
 from app.redis_client import conversation_lock
 from app.repeticion import contar_repeticion
 from app.repeticion import reset as reset_repeticion
@@ -619,6 +621,28 @@ def _monto_minimo(cfg) -> float:
         return 0.0
 
 
+async def _registrar_uso(agente: str, result, duracion_ms: float) -> None:
+    """Tokens y latencia del turno, para el módulo Uso del panel. Va en su propia
+    función porque NO puede tumbar el turno: una métrica perdida no vale una
+    respuesta perdida."""
+    usage = getattr(getattr(result, "context_wrapper", None), "usage", None)
+    log.info(
+        "turno_uso",
+        agente=agente,
+        duracion_ms=round(duracion_ms),
+        tokens_entrada=getattr(usage, "input_tokens", 0),
+        tokens_salida=getattr(usage, "output_tokens", 0),
+        tokens_total=getattr(usage, "total_tokens", 0),
+        requests=getattr(usage, "requests", 0),
+    )
+    if usage is None:
+        return
+    try:
+        await uso.registrar(agente, usage, duracion_ms)
+    except Exception as exc:  # noqa: BLE001
+        log.warning("uso_registrar_fallo", agente=agente, error=str(exc))
+
+
 async def _correr_agente(
     texto: str, ctx: ConversationContext
 ) -> RespuestaBot | None:
@@ -631,6 +655,7 @@ async def _correr_agente(
     ctx.permite_escalar = veredicto.permite_escalar
     ctx.motivo_determinador = veredicto.motivo
     log.info("agente_elegido", chat_id=ctx.chat_id, agente=nombre, canal=ctx.emisor)
+    arranque = time.monotonic()
     try:
         result = await asyncio.wait_for(
             Runner.run(
@@ -644,6 +669,7 @@ async def _correr_agente(
             ),
             timeout=settings.agente_timeout,
         )
+        await _registrar_uso(nombre, result, (time.monotonic() - arranque) * 1000)
         salida = result.final_output
         if isinstance(salida, RespuestaBot):
             return salida

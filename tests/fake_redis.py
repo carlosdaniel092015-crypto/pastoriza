@@ -87,6 +87,11 @@ class FakeRedis:
         await self._tocar("hgetall")
         return dict(self.hashes.get(key, {}))
 
+    async def hincrby(self, key: str, campo: str, cuanto: int = 1) -> int:
+        h = self.hashes.setdefault(key, {})
+        h[campo] = str(int(h.get(campo, 0)) + int(cuanto))
+        return int(h[campo])
+
     async def hdel(self, key: str, *campos: str) -> int:
         h = self.hashes.get(key, {})
         return sum(int(h.pop(c, None) is not None) for c in campos)

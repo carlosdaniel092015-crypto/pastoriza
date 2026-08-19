@@ -52,7 +52,7 @@ from app.estado import (
     set_bot_global,
 )
 from app.logging_conf import get_logger
-from app.panel import agentes_custom, conocimiento, events, prompt_store
+from app.panel import agentes_custom, conocimiento, events, prompt_store, uso
 from app.panel.analista import analizar_y_sugerir
 from app.panel.ui import MANIFEST, PANEL_HTML, SERVICE_WORKER
 from app import score
@@ -432,6 +432,16 @@ async def api_asignar_canal(
         detalle=f"{len(huerfanos)} conversación(es) sin canal asignadas a {nombre_canal(c)}",
     )
     return {"ok": True, "asignadas": len(huerfanos), "canal": c}
+
+
+@panel_router.get("/api/uso")
+async def api_uso(
+    dias: int = 7, x_panel_token: str | None = Header(default=None)
+) -> dict:
+    """Tokens gastados y latencia del bot, por día y por agente. NO va por canal:
+    el gasto es del bot entero (una sola cuenta de OpenAI, un solo servidor)."""
+    _auth(x_panel_token)
+    return await uso.resumen(dias)
 
 
 @panel_router.post("/api/chats/{chat_id}/asignar-canal")
