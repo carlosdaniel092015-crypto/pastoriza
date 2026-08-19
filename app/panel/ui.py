@@ -145,6 +145,19 @@ PANEL_HTML = r"""<!doctype html>
   .sem.amarillo{background:var(--cinta)}
   .sem.cerrado{background:var(--senal);border-radius:2px}
   .sem.gris{background:var(--line)}
+  /* MODULO USO: tokens y latencia. */
+  .usogrid{display:grid;grid-template-columns:repeat(auto-fit,minmax(190px,1fr));gap:12px;margin-top:14px}
+  .usocard{background:var(--panel2);border:1px solid var(--line);border-radius:var(--r);padding:12px 14px}
+  .usok{font-size:11.5px;color:var(--mut);text-transform:uppercase;letter-spacing:.04em}
+  .usov{font-family:var(--mono);font-size:22px;margin:6px 0 2px}
+  .usosub{font-size:11.5px;color:var(--mut);line-height:1.4}
+  .usoh{font-size:13px;margin:22px 0 8px;color:var(--mut);font-weight:600}
+  .usotw{overflow-x:auto;border:1px solid var(--line);border-radius:var(--r)}
+  .usot{width:100%;border-collapse:collapse;font-size:13px}
+  .usot th{text-align:left;padding:9px 12px;background:var(--panel);border-bottom:1px solid var(--line);
+    font-size:11.5px;color:var(--mut);text-transform:uppercase;letter-spacing:.04em;font-weight:600;white-space:nowrap}
+  .usot td{padding:9px 12px;border-bottom:1px solid var(--line);white-space:nowrap}
+  .usot tr:last-child td{border-bottom:0}
   .semcols{display:grid;grid-template-columns:repeat(auto-fit,minmax(230px,1fr));gap:12px;margin-top:14px}
   .semcol{background:var(--panel2);border:1px solid var(--line);border-radius:var(--r);overflow:hidden;
     display:flex;flex-direction:column;min-height:120px}
@@ -431,6 +444,7 @@ PANEL_HTML = r"""<!doctype html>
       <button class="it" data-v="prompt"><span class="n">04</span>Prompt</button>
       <button class="it" data-v="aprendizaje"><span class="n">05</span>Aprendizaje<span class="badge" id="badgeSug" style="display:none">0</span></button>
       <button class="it" data-v="semaforo"><span class="n">06</span>Semáforo<span class="badge verde" id="badgeSem" style="display:none">0</span></button>
+      <button class="it" data-v="uso"><span class="n">07</span>Uso</button>
       <div class="foot"><button class="themebtn" onclick="toggleTheme()" id="themebtn" title="Cambiar tema">☾</button><div class="ver mono" id="ver" title="Versión que está corriendo en el servidor">—</div></div>
     </nav>
 
@@ -553,6 +567,20 @@ PANEL_HTML = r"""<!doctype html>
           <div id="semcols" class="semcols"></div>
         </div>
       </section>
+      <!-- Uso: tokens y latencia -->
+      <section class="view" id="v-uso">
+        <div class="pane">
+          <h2>Uso del bot</h2>
+          <div class="sub">Cuántos tokens gasta y qué tan rápido responde. Los tokens son lo que se le paga a OpenAI; la latencia es lo que espera el cliente.</div>
+          <div class="filters">
+            <button class="btn sec sm" onclick="loadUso(1)">Hoy</button>
+            <button class="btn sec sm" onclick="loadUso(7)">7 días</button>
+            <button class="btn sec sm" onclick="loadUso(30)">30 días</button>
+            <span class="meta" id="usomsg"></span>
+          </div>
+          <div id="usobody"></div>
+        </div>
+      </section>
     </main>
   </div>
 </div>
@@ -562,7 +590,7 @@ PANEL_HTML = r"""<!doctype html>
 const $ = s => document.querySelector(s);
 let TOKEN = localStorage.getItem('panel_token') || '';
 let lastEventId=0, selChat=null, chatsCache=[], alertCount=0, alerts=[], filtro='todos', prodMap={}, curItems=[];
-const TITULOS={conv:'Conversaciones',alertas:'Alertas',config:'Config',prompt:'Prompt',aprendizaje:'Aprendizaje',semaforo:'Semáforo'};
+const TITULOS={conv:'Conversaciones',alertas:'Alertas',config:'Config',prompt:'Prompt',aprendizaje:'Aprendizaje',semaforo:'Semáforo',uso:'Uso'};
 
 function headers(){ return TOKEN?{'X-Panel-Token':TOKEN,'Content-Type':'application/json'}:{'Content-Type':'application/json'}; }
 async function api(path,opt){ const r=await fetch('/panel/api'+path,{headers:headers(),...(opt||{})});
@@ -589,6 +617,7 @@ document.querySelectorAll('nav.side .it').forEach(b=>b.onclick=()=>{
   document.querySelectorAll('.view').forEach(v=>v.classList.remove('active')); $('#v-'+b.dataset.v).classList.add('active');
   if(b.dataset.v==='config') loadCfg(); if(b.dataset.v==='prompt') loadPrompt(); if(b.dataset.v==='aprendizaje') loadAprendizaje();
   if(b.dataset.v==='semaforo') renderSemaforo();
+  if(b.dataset.v==='uso') loadUso(usoDias);
   marcarComun();  // el aviso de "esto es común a los dos canales" se re-pinta al entrar
   if(b.dataset.v==='alertas'){ alertCount=0; renderBadge(); if(b.dataset.filtro){ setFiltro(b.dataset.filtro); } }
 });
@@ -795,6 +824,49 @@ async function calcularSemaforo(rehacer){
     if(msg) msg.innerHTML=`<span class="ok">Listo: ${d.calculadas||0} calculada(s), ${d.con_senales||0} con señales.</span>`;
     _chatsSig=''; await loadChats(); renderSemaforo();
   }catch(e){ if(msg) msg.innerHTML='<span class="bad">No se pudo calcular: '+esc(String(e))+'</span>'; }
+}
+// ---- Módulo Uso: tokens y latencia ----
+// El gasto NO va por canal a propósito: es una sola cuenta de OpenAI y un solo
+// servidor, así que separarlo por número sería inventar una división que no existe.
+let usoDias=7;
+function fmtNum(n){ return Number(n||0).toLocaleString('es-DO'); }
+function fmtMs(ms){ const s=Number(ms||0)/1000; return s<10?s.toFixed(1)+' s':Math.round(s)+' s'; }
+function promedio(fila){ return fila.turnos?fila.duracion_ms/fila.turnos:0; }
+async function loadUso(dias){
+  usoDias=dias||usoDias; const msg=$('#usomsg'), body=$('#usobody');
+  if(msg) msg.textContent='Leyendo…';
+  try{
+    const d=await api('/uso?dias='+usoDias);
+    if(msg) msg.textContent='';
+    if(body) body.innerHTML=renderUso(d);
+  }catch(e){ if(msg) msg.innerHTML='<span class="bad">No se pudo leer: '+esc(String(e))+'</span>'; }
+}
+function renderUso(d){
+  const t=d.total||{}, agentes=d.por_agente||{}, dias=d.dias||[];
+  if(!t.turnos) return '<div class="empty">Todavía no hay turnos registrados en este período. Se van sumando solos con cada mensaje que atiende el bot.</div>';
+  const tarjetas=[
+    ['Turnos atendidos', fmtNum(t.turnos), 'cada mensaje que el bot respondió con el modelo'],
+    ['Tokens gastados', fmtNum(t.tokens_total), fmtNum(t.tokens_entrada)+' de entrada · '+fmtNum(t.tokens_salida)+' de salida'],
+    ['Respuesta promedio', fmtMs(promedio(t)), 'lo que espera el cliente por cada respuesta'],
+    ['Llamadas al modelo', fmtNum(t.requests), (t.turnos?(t.requests/t.turnos).toFixed(1):'0')+' por turno'],
+  ].map(([k,v,sub])=>`<div class="usocard"><div class="usok">${esc(k)}</div><div class="usov">${esc(v)}</div><div class="usosub">${esc(sub)}</div></div>`).join('');
+
+  const filas=Object.keys(agentes).sort().map(a=>{
+    const f=agentes[a];
+    return `<tr><td class="mono">${esc(a)}</td><td>${fmtNum(f.turnos)}</td><td>${fmtNum(f.tokens_total)}</td>
+      <td>${fmtNum(f.turnos?Math.round(f.tokens_total/f.turnos):0)}</td><td>${fmtMs(promedio(f))}</td></tr>`;
+  }).join('');
+
+  const porDia=dias.filter(x=>(x.total||{}).turnos).map(x=>{
+    const f=x.total;
+    return `<tr><td class="mono">${esc(x.fecha)}</td><td>${fmtNum(f.turnos)}</td><td>${fmtNum(f.tokens_total)}</td><td>${fmtMs(promedio(f))}</td></tr>`;
+  }).join('');
+
+  return `<div class="usogrid">${tarjetas}</div>
+    <h3 class="usoh">Por agente</h3>
+    <div class="usotw"><table class="usot"><thead><tr><th>Agente</th><th>Turnos</th><th>Tokens</th><th>Tokens/turno</th><th>Promedio</th></tr></thead><tbody>${filas}</tbody></table></div>
+    <h3 class="usoh">Por día</h3>
+    <div class="usotw"><table class="usot"><thead><tr><th>Día</th><th>Turnos</th><th>Tokens</th><th>Promedio</th></tr></thead><tbody>${porDia}</tbody></table></div>`;
 }
 // Prefijo de quién habló último en la conversación (el cliente, el bot o un asesor).
 function quienDijo(de){

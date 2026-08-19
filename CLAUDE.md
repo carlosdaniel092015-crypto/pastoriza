@@ -110,6 +110,14 @@ de alta las plantillas en Meta una vez: **`PLANTILLA_META.md`** tiene el texto e
 texto cambia, rehacé los topes de `MAX_*` en `aprobacion.py` (el cuerpo no pasa de 1024). El comprobante se republica en `/panel/media/...`
 (`app/media_publica.py`) porque las URLs de YCloud exigen `X-API-Key` y Meta no puede bajarlas.
 
+**Uso / observabilidad (`app/panel/uso.py`, módulo **07 Uso**):** tokens gastados y latencia por
+día y por agente. Se acumula con `HINCRBY` en una key por día (`pastoriza:panel:uso:<fecha>`, TTL
+45 días) en vez de un evento por turno: con cientos de turnos diarios eso sería una lista sin
+techo, y el panel sólo necesita totales. Lo registra `_registrar_uso` (pipeline) leyendo
+`result.context_wrapper.usage` del SDK, y **nunca puede tumbar el turno**: un fallo ahí sólo
+pierde la métrica. NO va por canal (una sola cuenta de OpenAI, un solo servidor). El detalle
+por turno igual queda en los logs (`turno_uso`).
+
 **Panel de operación** (`app/panel/`, servido en `/panel`, protegido con `PANEL_TOKEN`): CRM en
 vivo, alertas, config, prompts por-agente, aprendizaje, kill-switch global. La UI es una SPA
 vanilla en `ui.py` (`PANEL_HTML`), **responsive** (nav lateral en escritorio → barra inferior +
