@@ -112,6 +112,11 @@ class Settings(BaseSettings):
     # lo reenvía en el header X-Telegram-Bot-Api-Secret-Token. Vacío = no se registra
     # el webhook ni se aceptan callbacks (los botones quedan inertes por seguridad).
     telegram_webhook_secret: str = ""
+    # Telegram es para ALERTAS: errores y cosas rotas. Con esto en True (por defecto) no
+    # se manda nada más — las sugerencias del analista, que son de MEJORA y no urgentes,
+    # quedan sólo en el panel (módulo Aprendizaje). Ponelo en False si querés que las
+    # sugerencias también lleguen por Telegram con sus botones.
+    telegram_solo_alertas: bool = True
 
     # ---------- Analista de aprendizaje ----------
     # Corrida automática del analista (propone reglas a partir de la cola de revisión).
