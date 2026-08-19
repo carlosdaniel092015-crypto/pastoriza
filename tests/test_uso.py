@@ -171,6 +171,58 @@ class TestUsoPorConversacion:
         assert (await uso.resumen(1))["total"]["tokens_total"] == 15
         assert await uso.top_chats() == []
 
+    @pytest.mark.asyncio
+    async def test_el_costo_sale_del_modelo_de_cada_agente(self, fake):
+        """El coste en dólares depende del MODELO, no del agente: los mismos tokens en
+        gpt-4o cuestan ~17x más que en mini."""
+        from app.panel import precios, uso
+
+        await uso.registrar(
+            "ventas", UsageFalso(100_000, 10_000, 110_000, 5), 900, "1809", "gpt-4o-mini"
+        )
+        await uso.registrar(
+            "pedido", UsageFalso(100_000, 10_000, 110_000, 1), 900, "1809", "gpt-4o"
+        )
+        d = await uso.resumen(1)
+        v = d["por_agente"]["ventas"]
+        p = d["por_agente"]["pedido"]
+        assert v["modelo"] == "gpt-4o-mini" and p["modelo"] == "gpt-4o"
+        assert v["costo_usd"] == pytest.approx(precios.costo("gpt-4o-mini", 100_000, 10_000))
+        assert p["costo_usd"] / v["costo_usd"] > 15  # mismos tokens, muchísimo más caro
+        assert d["total"]["costo_usd"] == pytest.approx(v["costo_usd"] + p["costo_usd"])
+        assert d["total"]["costo_completo"] is True
+        # Y por conversación da lo mismo que el total (acá sólo hay una).
+        assert (await uso.por_chat("1809"))["total"]["costo_usd"] == pytest.approx(
+            d["total"]["costo_usd"]
+        )
+
+    @pytest.mark.asyncio
+    async def test_un_modelo_sin_tarifa_marca_el_total_como_incompleto(self, fake):
+        """Mejor decir "faltan datos" que sumar de menos y parecer más barato."""
+        from app.panel import uso
+
+        await uso.registrar("ventas", UsageFalso(1000, 100, 1100, 1), 100, "x", "gpt-4o-mini")
+        await uso.registrar("raro", UsageFalso(1000, 100, 1100, 1), 100, "x", "modelo-inventado")
+        d = await uso.resumen(1)
+        assert d["por_agente"]["raro"]["costo_usd"] is None
+        assert d["por_agente"]["ventas"]["costo_usd"] > 0
+        assert d["total"]["costo_completo"] is False
+
+    @pytest.mark.asyncio
+    async def test_sin_modelo_el_costo_es_desconocido_no_cero(self, fake):
+        """Los turnos registrados ANTES de este cambio no tienen modelo guardado."""
+        from app.panel import uso
+
+        await uso.registrar("ventas", UsageFalso(1000, 100, 1100, 1), 100, "y")
+        d = await uso.resumen(1)
+        assert d["por_agente"]["ventas"]["costo_usd"] is None
+        assert d["por_agente"]["ventas"]["tokens_total"] == 1100  # los tokens sí están
+
+    def test_el_resumen_informa_las_tarifas_usadas(self, cliente, fake):
+        """La proyección tiene que ser auditable: con qué precios se hizo la cuenta."""
+        d = _get(cliente, "/panel/api/uso?dias=1")
+        assert d["tarifas"]["gpt-4o-mini"] == {"entrada": 0.15, "salida": 0.60}
+
     def test_el_hilo_devuelve_el_uso_de_esa_conversacion(self, cliente, fake):
         import asyncio
 

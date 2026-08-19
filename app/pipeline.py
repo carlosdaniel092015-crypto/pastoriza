@@ -711,13 +711,17 @@ async def _correr_agente(
     ctx.permite_escalar = veredicto.permite_escalar
     ctx.motivo_determinador = veredicto.motivo
     log.info("agente_elegido", chat_id=ctx.chat_id, agente=nombre, canal=ctx.emisor)
+    especialista = obtener_especialista(nombre, ctx.emisor)
+    # El modelo sale del Agent, no de un mapa aparte: los agentes PERSONALIZADOS del
+    # panel pueden usar otro modelo, y adivinarlo daría un coste en dólares falso.
+    modelo = str(getattr(especialista, "model", "") or "")
     arranque = time.monotonic()
     try:
         result = await asyncio.wait_for(
             Runner.run(
                 # obtener(): agente base o PERSONALIZADO creado desde el panel (los
                 # personalizados pueden existir sólo en uno de los dos números).
-                obtener_especialista(nombre, ctx.emisor),
+                especialista,
                 texto,
                 context=ctx,
                 session=session,
@@ -726,7 +730,7 @@ async def _correr_agente(
             timeout=settings.agente_timeout,
         )
         await _registrar_uso(
-            nombre, result, (time.monotonic() - arranque) * 1000, ctx.chat_id
+            nombre, result, (time.monotonic() - arranque) * 1000, ctx.chat_id, modelo
         )
         salida = result.final_output
         if isinstance(salida, RespuestaBot):

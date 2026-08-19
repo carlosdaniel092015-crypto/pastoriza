@@ -126,7 +126,11 @@ se le pasó al modelo (transcripción del audio, análisis visual de la foto), a
 se veía como `## ANALISIS VISUAL: TIPO_ENVASE: Botella...` y una nota de voz sólo como su
 transcripción — imposible juzgar si el bot entendió bien. Ahora se guarda una copia del
 archivo **a DISCO** (volumen `media-data:/srv/media`), NO a Redis: ahí vive la config del
-negocio con `noeviction` y llenarla de fotos haría FALLAR escrituras reales. El índice
+negocio con `noeviction` y llenarla de fotos haría FALLAR escrituras reales. Se ve DENTRO de la
+conversación (como WhatsApp), no en una tira aparte: el emparejado usa la transcripción/análisis
+que el índice guarda, porque ese mismo texto está en el mensaje y así el token no tiene que entrar
+al historial (iría al modelo en cada turno). Lo que no se casa con ningún mensaje se pinta como
+burbuja propia en su lugar cronológico — un archivo huérfano no se puede esconder. El índice
 (`pastoriza:panel:media:<chat_id>`, TTL 7 días como la sesión) sí va a Redis. Se sirve por
 `GET /api/media/{token}` **con** `PANEL_TOKEN` (a diferencia de `/panel/media/...`, que es sin
 auth porque ahí entra Meta): son fotos de clientes y comprobantes. La UI lo baja por `fetch`
@@ -143,7 +147,12 @@ por turno igual queda en los logs (`turno_uso`). También **por conversación**
 (`pastoriza:panel:uso:chat:<chat_id>`, TTL 7 días como la sesión) con el desglose
 entrada/salida por agente, más un ZSET de ranking (`uso:chats`, tope 300) para no escanear una
 key por cliente: así se puede ver CUÁL conversación se come los tokens y con qué agente
-(no es lo mismo `ventas` en mini que `pedido` en gpt-4o).
+(no es lo mismo `ventas` en mini que `pedido` en gpt-4o). El **coste en dólares** sale de
+`app/panel/precios.py` (tarifa por modelo, USD/1M): por eso se guarda el `modelo` de cada agente
+(sale del `Agent`, no de un mapa, porque los agentes del panel pueden usar otro) y el coste se
+calcula AL LEER, no al escribir, así un cambio de tarifa se refleja en lo ya registrado. Un modelo
+sin tarifa da `None`, NO cero: un cero mentiría diciendo que ese agente es gratis. Es una
+PROYECCIÓN y la factura real puede ser menor (el prompt caching no se descuenta acá).
 
 **Panel de operación** (`app/panel/`, servido en `/panel`, protegido con `PANEL_TOKEN`): CRM en
 vivo, alertas, config, prompts por-agente, aprendizaje, kill-switch global. La UI es una SPA

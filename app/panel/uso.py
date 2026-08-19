@@ -11,6 +11,7 @@ from datetime import datetime, timedelta
 from typing import Any
 
 from app.logging_conf import get_logger
+from app.panel import precios
 from app.redis_client import run_write, with_reconnect
 from app.settings import settings
 
@@ -47,7 +48,7 @@ def _hoy() -> str:
 
 
 async def registrar(
-    agente: str, usage: Any, duracion_ms: float, chat_id: str = ""
+    agente: str, usage: Any, duracion_ms: float, chat_id: str = "", modelo: str = ""
 ) -> None:
     """Se llama después de cada turno del agente. Nunca debe romper el turno del
     cliente: si Redis falla acá, sólo se pierde una métrica, no la respuesta."""
@@ -66,6 +67,11 @@ async def registrar(
         pipe.hincrby(key, f"{agente}:requests", requests)
         pipe.hincrby(key, f"{agente}:turnos", 1)
         pipe.hincrby(key, f"{agente}:duracion_ms", int(duracion_ms))
+        # El modelo se guarda (no se suma) porque de él depende la TARIFA: los mismos
+        # tokens en gpt-4o cuestan ~17x más que en mini, así que sin esto el coste en
+        # dólares sería inventado.
+        if modelo:
+            pipe.hset(key, f"{agente}:modelo", modelo)
         pipe.expire(key, TTL_SEGUNDOS)
         if chat_id:
             # Mismo desglose pero de ESA conversación: cuál gastó más y con qué agente.
@@ -76,6 +82,8 @@ async def registrar(
             pipe.hincrby(kc, f"{agente}:requests", requests)
             pipe.hincrby(kc, f"{agente}:turnos", 1)
             pipe.hincrby(kc, f"{agente}:duracion_ms", int(duracion_ms))
+            if modelo:
+                pipe.hset(kc, f"{agente}:modelo", modelo)
             pipe.expire(kc, TTL_POR_CHAT)
             # Ranking, para no tener que escanear todas las conversaciones.
             pipe.zincrby(_key_ranking(), total, chat_id)
@@ -112,51 +120,73 @@ async def resumen(dias: int = 7) -> dict:
         crudos = [{} for _ in fechas]
 
     por_dia: list[dict] = []
-    totales_por_agente: dict[str, dict[str, int]] = {}
+    totales_por_agente: dict[str, dict] = {}
     for fecha, crudo in zip(fechas, crudos):
-        agentes_del_dia: dict[str, dict[str, int]] = {}
-        for campo, valor in (crudo or {}).items():
-            agente, _, sufijo = campo.rpartition(":")
-            if not agente or sufijo not in _CAMPOS:
-                continue
-            fila = agentes_del_dia.setdefault(agente, _fila_vacia())
-            fila[sufijo] += int(valor)
+        agentes_del_dia, total_dia = _desglosar(crudo)
+        for agente, fila in agentes_del_dia.items():
             tot = totales_por_agente.setdefault(agente, _fila_vacia())
-            tot[sufijo] += int(valor)
-        total_dia = _fila_vacia()
-        for fila in agentes_del_dia.values():
             for c in _CAMPOS:
-                total_dia[c] += fila[c]
+                tot[c] += int(fila.get(c, 0))
+            if fila.get("modelo"):
+                tot["modelo"] = fila["modelo"]
         por_dia.append({"fecha": fecha, "agentes": agentes_del_dia, "total": total_dia})
     por_dia.reverse()  # más antiguo primero, para leer la tendencia de izquierda a derecha
 
-    total_general = _fila_vacia()
-    for fila in totales_por_agente.values():
-        for c in _CAMPOS:
-            total_general[c] += fila[c]
+    total_general = _con_costo(totales_por_agente)
 
     return {
         "dias": por_dia,
         "por_agente": totales_por_agente,
         "total": total_general,
         "chats": await top_chats(),
+        # Para que el panel pueda decir con qué tarifas se hizo la cuenta: es una
+        # proyección, y el operador tiene que poder verificarla.
+        "tarifas": {m: {"entrada": e, "salida": s} for m, (e, s) in precios.PRECIOS.items()},
     }
 
 
-def _desglosar(crudo: dict) -> tuple[dict[str, dict[str, int]], dict[str, int]]:
+def _desglosar(crudo: dict) -> tuple[dict[str, dict], dict[str, Any]]:
     """Pasa de los campos planos de Redis (`agente:campo`) a {agente: {campo: n}} más
     el total. Es el mismo formato que devuelve `resumen`, así la UI no aprende dos."""
-    por_agente: dict[str, dict[str, int]] = {}
+    por_agente: dict[str, dict] = {}
     for campo, valor in (crudo or {}).items():
         agente, _, sufijo = campo.rpartition(":")
-        if not agente or sufijo not in _CAMPOS:
+        if not agente:
             continue
-        por_agente.setdefault(agente, _fila_vacia())[sufijo] += int(valor)
+        if sufijo == "modelo":
+            por_agente.setdefault(agente, _fila_vacia())["modelo"] = str(valor)
+            continue
+        if sufijo not in _CAMPOS:
+            continue
+        fila = por_agente.setdefault(agente, _fila_vacia())
+        fila[sufijo] = int(fila.get(sufijo, 0)) + int(valor)
+    total = _con_costo(por_agente)
+    return por_agente, total
+
+
+def _con_costo(por_agente: dict[str, dict]) -> dict[str, Any]:
+    """Agrega `costo_usd` a cada agente y devuelve el total. El coste NO se guarda en
+    Redis: se calcula al leer, así un cambio de tarifa se refleja en lo ya registrado
+    en vez de quedar congelado con el precio del día en que se gastó."""
     total = _fila_vacia()
+    total_usd = 0.0
+    # Si algún agente usó un modelo sin tarifa conocida, el total queda marcado como
+    # incompleto: mejor decir "faltan datos" que sumar de menos y parecer más barato.
+    completo = True
     for fila in por_agente.values():
         for c in _CAMPOS:
-            total[c] += fila[c]
-    return por_agente, total
+            total[c] += int(fila.get(c, 0))
+        usd = precios.costo(
+            fila.get("modelo", ""), fila.get("tokens_entrada", 0), fila.get("tokens_salida", 0)
+        )
+        fila["costo_usd"] = usd
+        if usd is None:
+            completo = False
+        else:
+            total_usd += usd
+    total["costo_usd"] = round(total_usd, 6)
+    total["costo_completo"] = completo
+    return total
 
 
 async def por_chat(chat_id: str) -> dict:
