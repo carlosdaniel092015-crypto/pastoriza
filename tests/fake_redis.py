@@ -16,6 +16,7 @@ class FakeRedis:
         self.kv: dict[str, str] = {}
         self.hashes: dict[str, dict[str, str]] = {}
         self.listas: dict[str, list[str]] = {}
+        self.zsets: dict[str, dict[str, float]] = {}
         self.seq: dict[str, int] = {}
         # Registro de operaciones: sirve para verificar que el panel no hace una
         # lectura por conversación en cada refresco.
@@ -120,6 +121,28 @@ class FakeRedis:
                 else self.listas[key][start : stop + 1]
             )
         return True
+
+    # --- zsets (ranking de consumo por conversación) ---
+    async def zincrby(self, key: str, cuanto: float, miembro: str) -> float:
+        z = self.zsets.setdefault(key, {})
+        z[miembro] = z.get(miembro, 0.0) + float(cuanto)
+        return z[miembro]
+
+    async def zrevrange(self, key: str, start: int, stop: int) -> list[str]:
+        orden = sorted(self.zsets.get(key, {}).items(), key=lambda kv: -kv[1])
+        miembros = [m for m, _ in orden]
+        return miembros[start:] if stop == -1 else miembros[start : stop + 1]
+
+    async def zremrangebyrank(self, key: str, start: int, stop: int) -> int:
+        z = self.zsets.get(key)
+        if not z:
+            return 0
+        # Rango por rank ASCENDENTE (score más bajo primero), como Redis.
+        orden = [m for m, _ in sorted(z.items(), key=lambda kv: kv[1])]
+        fuera = orden[start:] if stop == -1 else orden[start : stop + 1]
+        for m in fuera:
+            z.pop(m, None)
+        return len(fuera)
 
     # --- scan ---
     async def scan_iter(self, match: str = "*", count: int = 100):

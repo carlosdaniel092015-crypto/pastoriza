@@ -166,6 +166,9 @@ PANEL_HTML = r"""<!doctype html>
   .usov{font-family:var(--mono);font-size:22px;margin:6px 0 2px}
   .usosub{font-size:11.5px;color:var(--mut);line-height:1.4}
   .usoh{font-size:13px;margin:22px 0 8px;color:var(--mut);font-weight:600}
+  .usochat{margin-top:8px;font-size:11.5px;color:var(--mut);font-family:var(--mono)}
+  .usochatag{margin-top:2px;opacity:.85}
+  .lnk{background:transparent;border:0;color:var(--senal);cursor:pointer;padding:0;font-size:13px;text-decoration:underline}
   .usotw{overflow-x:auto;border:1px solid var(--line);border-radius:var(--r)}
   .usot{width:100%;border-collapse:collapse;font-size:13px}
   .usot th{text-align:left;padding:9px 12px;background:var(--panel);border-bottom:1px solid var(--line);
@@ -868,9 +871,26 @@ function renderUso(d){
 
   const filas=Object.keys(agentes).sort().map(a=>{
     const f=agentes[a];
-    return `<tr><td class="mono">${esc(a)}</td><td>${fmtNum(f.turnos)}</td><td>${fmtNum(f.tokens_total)}</td>
+    return `<tr><td class="mono">${esc(a)}</td><td>${fmtNum(f.turnos)}</td><td>${fmtNum(f.tokens_entrada)}</td>
+      <td>${fmtNum(f.tokens_salida)}</td><td>${fmtNum(f.tokens_total)}</td>
       <td>${fmtNum(f.turnos?Math.round(f.tokens_total/f.turnos):0)}</td><td>${fmtMs(promedio(f))}</td></tr>`;
   }).join('');
+
+  // Por conversación: para responder "¿cuál se está comiendo los tokens?". Se ordena
+  // de mayor a menor porque lo que interesa es la de arriba, no el promedio.
+  const chats=(d.chats||[]);
+  const filasChats=chats.map(c=>{
+    const ag=(c.agentes||[]).join(', ')||'—';
+    return `<tr><td><button class="lnk mono" onclick="irAlChat('${esc(c.chat_id)}')">${esc(c.chat_id)}</button></td>
+      <td class="mono">${esc(ag)}</td><td>${fmtNum(c.turnos)}</td><td>${fmtNum(c.tokens_entrada)}</td>
+      <td>${fmtNum(c.tokens_salida)}</td><td>${fmtNum(c.tokens_total)}</td>
+      <td>${fmtNum(c.turnos?Math.round(c.tokens_total/c.turnos):0)}</td></tr>`;
+  }).join('');
+  const bloqueChats=chats.length
+    ? `<h3 class="usoh">Por conversación · las que más gastaron</h3>
+       <div class="usotw"><table class="usot"><thead><tr><th>Conversación</th><th>Agentes</th><th>Turnos</th>
+       <th>Entrada</th><th>Salida</th><th>Tokens</th><th>Tokens/turno</th></tr></thead><tbody>${filasChats}</tbody></table></div>`
+    : '';
 
   const porDia=dias.filter(x=>(x.total||{}).turnos).map(x=>{
     const f=x.total;
@@ -879,9 +899,28 @@ function renderUso(d){
 
   return `<div class="usogrid">${tarjetas}</div>
     <h3 class="usoh">Por agente</h3>
-    <div class="usotw"><table class="usot"><thead><tr><th>Agente</th><th>Turnos</th><th>Tokens</th><th>Tokens/turno</th><th>Promedio</th></tr></thead><tbody>${filas}</tbody></table></div>
+    <div class="usotw"><table class="usot"><thead><tr><th>Agente</th><th>Turnos</th><th>Entrada</th><th>Salida</th><th>Tokens</th><th>Tokens/turno</th><th>Promedio</th></tr></thead><tbody>${filas}</tbody></table></div>
+    ${bloqueChats}
     <h3 class="usoh">Por día</h3>
     <div class="usotw"><table class="usot"><thead><tr><th>Día</th><th>Turnos</th><th>Tokens</th><th>Promedio</th></tr></thead><tbody>${porDia}</tbody></table></div>`;
+}
+// Lo que gastó ESTA conversación, en el encabezado del hilo. Con el desglose por
+// agente: no es lo mismo que se lo haya comido `ventas` (mini, barato) que `pedido`.
+function usoDelChat(u){
+  const t=(u||{}).total||{}; if(!t.turnos) return '';
+  const ags=Object.keys((u||{}).por_agente||{}).sort().map(a=>{
+    const f=u.por_agente[a];
+    return esc(a)+' '+fmtNum(f.tokens_total)+' ('+fmtNum(f.turnos)+' turno'+(f.turnos===1?'':'s')+')';
+  }).join(' · ');
+  return `<div class="usochat">⚡ ${fmtNum(t.tokens_total)} tokens · ${fmtNum(t.tokens_entrada)} entrada / ${fmtNum(t.tokens_salida)} salida
+    · ${fmtNum(t.turnos)} turno(s) · ${fmtMs(promedio(t))} promedio${ags?`<div class="usochatag">${ags}</div>`:''}</div>`;
+}
+// Desde la tabla de consumo se puede saltar a la conversación: ver el número gastando
+// tokens sin poder leer de qué se habló no sirve para decidir nada.
+function irAlChat(id){
+  const b=document.querySelector('nav.side .it[data-v="conv"]');
+  if(b) b.click();
+  openChat(id);
 }
 // Prefijo de quién habló último en la conversación (el cliente, el bot o un asesor).
 function quienDijo(de){
@@ -1011,6 +1050,7 @@ async function openChat(id){
     ${fila.aprobacion==='pendiente'?(fila.con_pago===false?`<div class="comun" style="margin:10px 0 0;display:block">🏬 <b>Pedido por aprobar</b> — retiro en tienda, sin comprobante (paga al retirar). El pedido ${fila.order_id?'<b>#'+fila.order_id+'</b> ':''}ya está en Odoo. Ya se le dijo que lo estás revisando; <b>cuando apruebes</b>, el bot le confirma el número.</div>`:`<div class="comun" style="margin:10px 0 0;display:block">💵 <b>Pago por verificar</b> — el cliente mandó el comprobante y el pedido ${fila.order_id?'<b>#'+fila.order_id+'</b> ':''}quedó registrado. Ya se le dijo que estamos verificando; <b>cuando apruebes</b>, el bot le confirma el número.</div>`):''}
     ${fila.aprobacion==='rechazado'?`<div class="comun" style="margin:10px 0 0;display:block">Pedido NO aprobado. Al cliente se le avisó con el motivo que escribiste y el WhatsApp del supervisor.</div>`:''}
     ${m.ad_id?`<div class="adbanner">📣 Vino del anuncio de Facebook${m.ad_producto?': '+esc(m.ad_producto):(m.ad_headline?': '+esc(m.ad_headline):'')} · ID ${esc(m.ad_id)}</div>`:''}
+    ${usoDelChat(d.uso)}
     <div class="acts">
       ${fila.aprobacion==='pendiente'?`<button class="abtn aprobar" onclick="aprobarPago('${id}')">✓ ${fila.con_pago===false?'Aprobar pedido':'Aprobar pago'}${fila.order_id?' #'+fila.order_id:''}</button>
       <button class="abtn" onclick="rechazarPago('${id}')">Pago no válido</button>`:''}

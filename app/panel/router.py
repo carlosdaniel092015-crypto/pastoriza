@@ -592,6 +592,8 @@ async def api_chat_hilo(
         # texto que se le pasó al modelo (transcripción / análisis visual), y con eso
         # no se puede juzgar si el bot entendió bien lo que le mandaron.
         "media": await media_chat.listar(chat_id),
+        # Lo que gastó ESTA conversación, con el desglose por agente.
+        "uso": await uso.por_chat(chat_id),
     }
 
 
