@@ -145,18 +145,9 @@ PANEL_HTML = r"""<!doctype html>
   .sem.amarillo{background:var(--cinta)}
   .sem.cerrado{background:var(--senal);border-radius:2px}
   .sem.gris{background:var(--line)}
-  /* MEDIA DEL CLIENTE: la foto/audio real, aparte de su transcripción o análisis. */
-  .mediastrip{border-bottom:1px solid var(--line);padding:10px 14px;background:var(--panel)}
-  .medh{font-size:11.5px;color:var(--mut);text-transform:uppercase;letter-spacing:.04em;margin-bottom:8px}
-  .medrow{display:flex;gap:10px;overflow-x:auto;padding-bottom:4px}
-  .medit{flex:0 0 auto;max-width:190px;background:var(--panel2);border:1px solid var(--line);
-    border-radius:var(--r);padding:6px}
-  .medit img{display:block;width:100%;max-height:150px;object-fit:cover;border-radius:4px;cursor:zoom-in}
-  .medit img:hover{opacity:.9}
-  .medit audio{width:180px;height:34px}
-  .medts{font-family:var(--mono);font-size:10.5px;color:var(--mut);margin-top:4px}
-  .medpie{font-size:11px;color:var(--mut);line-height:1.35;margin-top:3px;
-    overflow:hidden;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical}
+  /* MEDIA DEL CLIENTE: la foto y el audio van DENTRO de la conversación, como en
+     WhatsApp. No hay tira aparte: ocupaba media pantalla y obligaba a mirar en dos
+     lugares para saber qué archivo iba con qué mensaje. */
   .vozlbl{display:block;font-size:11px;color:var(--mut);margin-bottom:3px}
   .voztxt{display:block;font-style:italic;margin-top:4px}
   /* El audio y la foto van DENTRO de la burbuja del mensaje: es donde se los busca
@@ -189,6 +180,10 @@ PANEL_HTML = r"""<!doctype html>
   .usov{font-family:var(--mono);font-size:22px;margin:6px 0 2px}
   .usosub{font-size:11.5px;color:var(--mut);line-height:1.4}
   .usoh{font-size:13px;margin:22px 0 8px;color:var(--mut);font-weight:600}
+  .usomod{color:var(--mut);font-size:11.5px}
+  .usobarc{width:120px;min-width:120px}
+  .usobar{display:block;height:5px;border-radius:3px;background:var(--senal);min-width:2px}
+  .usonota{font-size:11.5px;color:var(--mut);line-height:1.5;margin-top:8px}
   .usochat{margin-top:8px;font-size:11.5px;color:var(--mut);font-family:var(--mono)}
   .usochatag{margin-top:2px;opacity:.85}
   .lnk{background:transparent;border:0;color:var(--senal);cursor:pointer;padding:0;font-size:13px;text-decoration:underline}
@@ -500,7 +495,6 @@ PANEL_HTML = r"""<!doctype html>
           </div>
           <div class="thread">
             <div class="thead" id="thead"><div class="row1"><button class="backbtn" onclick="cerrarHilo()" title="Volver">‹</button><div><div class="cn">Elegí una conversación</div></div></div></div>
-            <div class="mediastrip" id="mediastrip" style="display:none"></div>
             <div class="msgs" id="msgs"><div class="empty">Selecciona un chat de la izquierda.</div></div>
             <div class="replyrow" id="replyrow">
               <input id="rin" placeholder="Escribe como asesor (pausa el bot 30 min)…" onkeydown="if(event.key==='Enter')responder()"/>
@@ -940,6 +934,15 @@ function renderSupervisor(d){
 // servidor, así que separarlo por número sería inventar una división que no existe.
 let usoDias=7;
 function fmtNum(n){ return Number(n||0).toLocaleString('es-DO'); }
+// Los costes por mensaje son fracciones de centavo: con 2 decimales todos darían $0.00.
+function fmtUSD(u){
+  if(u===null||u===undefined) return '—';
+  const n=Number(u);
+  if(!n) return '$0.00';
+  if(n<0.01) return '$'+n.toFixed(5);
+  if(n<1) return '$'+n.toFixed(4);
+  return '$'+n.toLocaleString('en-US',{minimumFractionDigits:2,maximumFractionDigits:2});
+}
 function fmtMs(ms){ const s=Number(ms||0)/1000; return s<10?s.toFixed(1)+' s':Math.round(s)+' s'; }
 function promedio(fila){ return fila.turnos?fila.duracion_ms/fila.turnos:0; }
 async function loadUso(dias){
@@ -954,18 +957,32 @@ async function loadUso(dias){
 function renderUso(d){
   const t=d.total||{}, agentes=d.por_agente||{}, dias=d.dias||[];
   if(!t.turnos) return '<div class="empty">Todavía no hay turnos registrados en este período. Se van sumando solos con cada mensaje que atiende el bot.</div>';
+  const usd=t.costo_usd, porMsg=t.turnos?usd/t.turnos:0;
   const tarjetas=[
     ['Turnos atendidos', fmtNum(t.turnos), 'cada mensaje que el bot respondió con el modelo'],
     ['Tokens gastados', fmtNum(t.tokens_total), fmtNum(t.tokens_entrada)+' de entrada · '+fmtNum(t.tokens_salida)+' de salida'],
+    ['Tokens / mensaje', fmtNum(t.turnos?Math.round(t.tokens_total/t.turnos):0), 'lo que se reenvía en cada respuesta'],
+    // El coste es una PROYECCIÓN: tokens × tarifa del modelo. La factura real puede ser
+    // MENOR (el prompt caching abarata la parte repetida y acá no se descuenta).
+    ['Coste', fmtUSD(usd), t.costo_completo===false?'incompleto: algún modelo sin tarifa':'proyectado con la tarifa de cada modelo'],
+    ['Coste / mensaje', fmtUSD(porMsg), 'lo que cuesta atender un mensaje'],
+    ['Coste / 1.000 msg', fmtUSD(porMsg*1000), 'proyección, no facturación'],
     ['Respuesta promedio', fmtMs(promedio(t)), 'lo que espera el cliente por cada respuesta'],
     ['Llamadas al modelo', fmtNum(t.requests), (t.turnos?(t.requests/t.turnos).toFixed(1):'0')+' por turno'],
   ].map(([k,v,sub])=>`<div class="usocard"><div class="usok">${esc(k)}</div><div class="usov">${esc(v)}</div><div class="usosub">${esc(sub)}</div></div>`).join('');
 
+  // La barra hace visible de un golpe cuál agente se lleva la plata: con gpt-4o al
+  // lado de mini, la diferencia es de un orden de magnitud y en números cuesta verla.
+  const maxUsd=Math.max(...Object.values(agentes).map(f=>f.costo_usd||0), 0.0000001);
   const filas=Object.keys(agentes).sort().map(a=>{
     const f=agentes[a];
-    return `<tr><td class="mono">${esc(a)}</td><td>${fmtNum(f.turnos)}</td><td>${fmtNum(f.tokens_entrada)}</td>
+    const pct=Math.round(((f.costo_usd||0)/maxUsd)*100);
+    return `<tr><td class="mono">${esc(a)}</td><td class="mono usomod">${esc(f.modelo||'—')}</td>
+      <td>${fmtNum(f.turnos)}</td><td>${fmtNum(f.tokens_entrada)}</td>
       <td>${fmtNum(f.tokens_salida)}</td><td>${fmtNum(f.tokens_total)}</td>
-      <td>${fmtNum(f.turnos?Math.round(f.tokens_total/f.turnos):0)}</td><td>${fmtMs(promedio(f))}</td></tr>`;
+      <td>${fmtUSD(f.costo_usd)}</td>
+      <td class="usobarc"><span class="usobar" style="width:${pct}%"></span></td>
+      <td>${fmtMs(promedio(f))}</td></tr>`;
   }).join('');
 
   // Por conversación: para responder "¿cuál se está comiendo los tokens?". Se ordena
@@ -976,25 +993,38 @@ function renderUso(d){
     return `<tr><td><button class="lnk mono" onclick="irAlChat('${esc(c.chat_id)}')">${esc(c.chat_id)}</button></td>
       <td class="mono">${esc(ag)}</td><td>${fmtNum(c.turnos)}</td><td>${fmtNum(c.tokens_entrada)}</td>
       <td>${fmtNum(c.tokens_salida)}</td><td>${fmtNum(c.tokens_total)}</td>
+      <td>${fmtUSD(c.costo_usd)}</td>
       <td>${fmtNum(c.turnos?Math.round(c.tokens_total/c.turnos):0)}</td></tr>`;
   }).join('');
   const bloqueChats=chats.length
     ? `<h3 class="usoh">Por conversación · las que más gastaron</h3>
        <div class="usotw"><table class="usot"><thead><tr><th>Conversación</th><th>Agentes</th><th>Turnos</th>
-       <th>Entrada</th><th>Salida</th><th>Tokens</th><th>Tokens/turno</th></tr></thead><tbody>${filasChats}</tbody></table></div>`
+       <th>Entrada</th><th>Salida</th><th>Tokens</th><th>Coste</th><th>Tokens/turno</th></tr></thead><tbody>${filasChats}</tbody></table></div>`
+    : '';
+  // Con qué tarifas se hizo la cuenta: es una proyección y tiene que ser auditable.
+  const tf=d.tarifas||{};
+  const bloqueTarifas=Object.keys(tf).length
+    ? `<h3 class="usoh">Tarifas usadas para la proyección</h3>
+       <div class="usotw"><table class="usot"><thead><tr><th>Modelo</th><th>Entrada (USD / 1M)</th><th>Salida (USD / 1M)</th></tr></thead><tbody>`+
+      Object.keys(tf).sort().map(m=>`<tr><td class="mono">${esc(m)}</td><td>$${tf[m].entrada}</td><td>$${tf[m].salida}</td></tr>`).join('')+
+      `</tbody></table></div>
+       <div class="usonota">Los precios los pone OpenAI y cambian: están en <span class="mono">app/panel/precios.py</span>.
+       La factura real puede ser MENOR que esta proyección, porque el descuento por prompt caching no se descuenta acá.</div>`
     : '';
 
   const porDia=dias.filter(x=>(x.total||{}).turnos).map(x=>{
     const f=x.total;
-    return `<tr><td class="mono">${esc(x.fecha)}</td><td>${fmtNum(f.turnos)}</td><td>${fmtNum(f.tokens_total)}</td><td>${fmtMs(promedio(f))}</td></tr>`;
+    return `<tr><td class="mono">${esc(x.fecha)}</td><td>${fmtNum(f.turnos)}</td><td>${fmtNum(f.tokens_total)}</td>
+      <td>${fmtUSD(f.costo_usd)}</td><td>${fmtMs(promedio(f))}</td></tr>`;
   }).join('');
 
   return `<div class="usogrid">${tarjetas}</div>
-    <h3 class="usoh">Por agente</h3>
-    <div class="usotw"><table class="usot"><thead><tr><th>Agente</th><th>Turnos</th><th>Entrada</th><th>Salida</th><th>Tokens</th><th>Tokens/turno</th><th>Promedio</th></tr></thead><tbody>${filas}</tbody></table></div>
+    <h3 class="usoh">Consumo por agente</h3>
+    <div class="usotw"><table class="usot"><thead><tr><th>Agente</th><th>Modelo</th><th>Turnos</th><th>Entrada</th><th>Salida</th><th>Tokens</th><th>Coste proyectado</th><th></th><th>Promedio</th></tr></thead><tbody>${filas}</tbody></table></div>
     ${bloqueChats}
     <h3 class="usoh">Por día</h3>
-    <div class="usotw"><table class="usot"><thead><tr><th>Día</th><th>Turnos</th><th>Tokens</th><th>Promedio</th></tr></thead><tbody>${porDia}</tbody></table></div>`;
+    <div class="usotw"><table class="usot"><thead><tr><th>Día</th><th>Turnos</th><th>Tokens</th><th>Coste</th><th>Promedio</th></tr></thead><tbody>${porDia}</tbody></table></div>
+    ${bloqueTarifas}`;
 }
 // Lo que gastó ESTA conversación, en el encabezado del hilo. Con el desglose por
 // agente: no es lo mismo que se lo haya comido `ventas` (mini, barato) que `pedido`.
@@ -1002,10 +1032,10 @@ function usoDelChat(u){
   const t=(u||{}).total||{}; if(!t.turnos) return '';
   const ags=Object.keys((u||{}).por_agente||{}).sort().map(a=>{
     const f=u.por_agente[a];
-    return esc(a)+' '+fmtNum(f.tokens_total)+' ('+fmtNum(f.turnos)+' turno'+(f.turnos===1?'':'s')+')';
+    return esc(a)+(f.modelo?' ('+esc(f.modelo)+')':'')+' '+fmtNum(f.tokens_total)+' tokens · '+fmtUSD(f.costo_usd);
   }).join(' · ');
   return `<div class="usochat">⚡ ${fmtNum(t.tokens_total)} tokens · ${fmtNum(t.tokens_entrada)} entrada / ${fmtNum(t.tokens_salida)} salida
-    · ${fmtNum(t.turnos)} turno(s) · ${fmtMs(promedio(t))} promedio${ags?`<div class="usochatag">${ags}</div>`:''}</div>`;
+    · ${fmtNum(t.turnos)} turno(s) · ${fmtMs(promedio(t))} promedio · <b>${fmtUSD(t.costo_usd)}</b>${ags?`<div class="usochatag">${ags}</div>`:''}</div>`;
 }
 // Desde la tabla de consumo se puede saltar a la conversación: ver el número gastando
 // tokens sin poder leer de qué se habló no sirve para decidir nada.
@@ -1160,11 +1190,9 @@ async function openChat(id){
   prodMap={};
   if(ids.size){ try{ const pr=await api('/productos?ids='+[...ids].join(',')); (pr.productos||[]).forEach(p=>prodMap[p.id]=p); }catch(e){} }
   // limpiarBlobs ANTES de pintar: si va después, revoca las URLs que se acaban de
-  // asignar y la foto queda en blanco. pintarMedia va al final porque necesita saber
-  // qué archivos ya quedaron dentro de un mensaje.
+  // asignar y la foto queda en blanco.
   limpiarBlobs();
   renderMsgs(curItems);
-  pintarMedia();
   cargarBlobs();
 }
 function contenidoStr(c){ if(c==null) return ''; if(Array.isArray(c)) return c.map(x=>(x&&(x.text||x.content))||'').join(' '); if(typeof c!=='string'){ try{ return JSON.stringify(c)||''; }catch(e){ return ''; } } return c; }
@@ -1173,24 +1201,17 @@ function contenidoStr(c){ if(c==null) return ''; if(Array.isArray(c)) return c.m
 // el bot entendió bien lo que le mandaron, así que la foto real va aparte, arriba.
 // Se baja por fetch (no <img src>) porque la ruta pide el token del panel en un header
 // y una etiqueta <img> no puede mandarlo: son fotos de clientes y comprobantes.
-// La tira de arriba queda SÓLO para lo que no se pudo casar con ningún mensaje del
-// hilo: la foto y el audio se ven dentro del mensaje, que es donde el operador los
-// busca. Pero un archivo huérfano no se puede esconder — si no aparece en ninguna
-// parte, parece que el cliente nunca lo mandó.
-async function pintarMedia(){
-  const el=$('#mediastrip'); if(!el) return;
-  const sueltos=curMedia.filter(m=>!_medUsados.has(m.token));
-  if(!sueltos.length){ el.innerHTML=''; el.style.display='none'; return; }
-  el.style.display='block';
-  el.innerHTML='<div class="medh">'+sueltos.length+' archivo(s) sin mensaje asociado</div>'+
-    '<div class="medrow">'+sueltos.map(m=>{
-      const pie=m.texto?`<div class="medpie" title="${esc(m.texto)}">${esc(m.texto.slice(0,90))}</div>`:'';
-      const cuerpo=m.tipo==='audio'
-        ? `<audio controls preload="none" data-med="${esc(m.token)}"></audio>`
-        : `<img data-med="${esc(m.token)}" alt="foto del cliente" loading="lazy" onclick="abrirMedia('${esc(m.token)}')">`;
-      return `<div class="medit">${cuerpo}<div class="medts">${fmtTime(m.ts)}</div>${pie}</div>`;
-    }).join('')+'</div>';
-  cargarBlobs();
+// TODO se ve dentro de la conversación, como en WhatsApp: no hay tira aparte. Lo que no
+// se pudo casar con un mensaje se pinta como su propia burbuja, en el lugar
+// cronológico que le toca — un archivo huérfano no se puede esconder, si no aparece en
+// ninguna parte parece que el cliente nunca lo mandó.
+function burbujaMediaSuelta(m){
+  const cuerpo=m.tipo==='audio'
+    ? `<span class="vozlbl">🎤 Nota de voz</span>`+reproductorAudio(m)+
+      (m.texto?`<span class="voztxt">${esc(m.texto)}</span>`:'')
+    : `<span class="vozlbl">📷 Foto</span>`+fotoEnBurbuja(m)+
+      (m.texto?`<span class="voztxt">${esc(m.texto.slice(0,180))}</span>`:'');
+  return `<div class="row l"><div class="bub user">${cuerpo}</div><div class="btime">${fmtTime(m.ts)}</div></div>`;
 }
 // Ver la foto en grande: en la burbuja va chica para no romper el hilo.
 function abrirMedia(token){
@@ -1267,10 +1288,16 @@ function renderMsgs(items){
   // Se re-arma en cada pintada: si no, al reabrir el chat todos los archivos quedarían
   // marcados como usados y no se mostraría ninguno.
   _medUsados=new Set();
-  if(!items||!items.length){ el.innerHTML='<div class="empty">Sin mensajes.</div>'; return; }
-  el.innerHTML=items.map(it=>{
+  if(!items||!items.length){
+    // Puede no haber historial y sí archivos (memoria limpiada, o el turno falló):
+    // igual se muestran, si no el operador no ve que el cliente mandó algo.
+    const sueltos=curMedia.map(m=>burbujaMediaSuelta(m)).join('');
+    el.innerHTML = sueltos || '<div class="empty">Sin mensajes.</div>';
+    return;
+  }
+  const filas=items.map(it=>{
     const tipo=it.type||'';
-    if(tipo.indexOf('function_call')>=0||tipo==='tool'||it.role==='tool'){ const n=it.name||it.tool||'acción'; return `<div class="tool">⌁ ${esc(n)} ▾</div>`; }
+    if(tipo.indexOf('function_call')>=0||tipo==='tool'||it.role==='tool'){ const n=it.name||it.tool||'acción'; return {ts:it.ts, html:`<div class="tool">⌁ ${esc(n)} ▾</div>`}; }
     const role=it.role||'assistant'; let raw=contenidoStr(it.content);
     const idx=(it._idx!==undefined&&it._idx!==null)?it._idx:-1;
     const acc=idx>=0?`<span class="msgacc"><button title="Corregir en el historial" onclick="editarMsg(${idx})">✎</button><button title="Borrar del historial" onclick="borrarMsg(${idx})">×</button></span>`:'';
@@ -1292,7 +1319,7 @@ function renderMsgs(items){
         const med=buscarMedia('imagen', analisis);
         if(med) cuerpo=cuerpo.replace('📷 Mandó una foto', '📷 Mandó una foto'+fotoEnBurbuja(med));
       }
-      return `<div class="row l"><div class="bub user">${cuerpo}${acc}</div><div class="btime">${fmtTime(it.ts)}</div></div>`;
+      return {ts:it.ts, html:`<div class="row l"><div class="bub user">${cuerpo}${acc}</div><div class="btime">${fmtTime(it.ts)}</div></div>`};
     }
     let msg=raw,chips=[],escal=false,sup=false;
     if(raw.startsWith('[SUPERVISOR]')){ sup=true; msg=raw.replace('[SUPERVISOR]','').trim(); }
@@ -1300,8 +1327,15 @@ function renderMsgs(items){
     let ch='';
     if(chips.length){ ch='<div class="pchips">'+chips.map(id=>{ const p=prodMap[id]; return `<div class="pchip"><span class="sku">#${esc(String(id))}</span><span class="pn">${p?esc(p.nombre):'producto '+id}</span>${p?`<span class="pp">RD$ ${Number(p.precio).toFixed(2)}</span>`:''}</div>`; }).join('')+'</div>'; }
     const badge=escal?'<span class="badge-esc">Pasado a un asesor</span>':'';
-    return `<div class="row r"><div class="bub ${sup?'super':'bot'}">${badge}${esc(msg)}${ch}${acc}</div><div class="btime">${fmtTime(it.ts)}</div></div>`;
-  }).join('');
+    return {ts:it.ts, html:`<div class="row r"><div class="bub ${sup?'super':'bot'}">${badge}${esc(msg)}${ch}${acc}</div><div class="btime">${fmtTime(it.ts)}</div></div>`};
+  });
+  // Los archivos que no se pudieron casar con ningún mensaje se insertan por HORA, no
+  // al final: puestos al final parecería que el cliente los mandó al terminar.
+  curMedia.filter(m=>!_medUsados.has(m.token)).forEach(m=>{
+    const donde=filas.findIndex(f=>f.ts && m.ts && f.ts > m.ts);
+    filas.splice(donde<0?filas.length:donde, 0, {ts:m.ts, html:burbujaMediaSuelta(m)});
+  });
+  el.innerHTML=filas.map(f=>f.html).join('');
   el.scrollTop=el.scrollHeight;
 }
 async function editarMsg(idx){ if(!selChat)return;
