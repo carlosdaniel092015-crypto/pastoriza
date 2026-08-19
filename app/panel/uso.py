@@ -23,29 +23,64 @@ TTL_SEGUNDOS = 45 * 86_400
 _CAMPOS = ("tokens_entrada", "tokens_salida", "tokens_total", "requests", "turnos", "duracion_ms")
 
 
+# El gasto POR CONVERSACIÓN vive lo mismo que el historial (SESSION_TTL_SECONDS): sirve
+# para explicar una conversación que está a la vista, no para contabilidad histórica.
+TTL_POR_CHAT = 7 * 86_400
+# Cuántas conversaciones se rankean. Es un ZSET: sin tope crecería con cada cliente.
+MAX_CHATS_RANKEADOS = 300
+
+
 def _key(fecha: str) -> str:
     return settings.key("panel", f"uso:{fecha}")
+
+
+def _key_chat(chat_id: str) -> str:
+    return settings.key("panel", f"uso:chat:{chat_id}")
+
+
+def _key_ranking() -> str:
+    return settings.key("panel", "uso:chats")
 
 
 def _hoy() -> str:
     return datetime.now().strftime("%Y-%m-%d")
 
 
-async def registrar(agente: str, usage: Any, duracion_ms: float) -> None:
+async def registrar(
+    agente: str, usage: Any, duracion_ms: float, chat_id: str = ""
+) -> None:
     """Se llama después de cada turno del agente. Nunca debe romper el turno del
     cliente: si Redis falla acá, sólo se pierde una métrica, no la respuesta."""
     agente = agente or "desconocido"
     key = _key(_hoy())
+    entrada = int(getattr(usage, "input_tokens", 0) or 0)
+    salida = int(getattr(usage, "output_tokens", 0) or 0)
+    total = int(getattr(usage, "total_tokens", 0) or 0)
+    requests = int(getattr(usage, "requests", 0) or 0)
 
     async def _op(r):
         pipe = r.pipeline()
-        pipe.hincrby(key, f"{agente}:tokens_entrada", int(getattr(usage, "input_tokens", 0) or 0))
-        pipe.hincrby(key, f"{agente}:tokens_salida", int(getattr(usage, "output_tokens", 0) or 0))
-        pipe.hincrby(key, f"{agente}:tokens_total", int(getattr(usage, "total_tokens", 0) or 0))
-        pipe.hincrby(key, f"{agente}:requests", int(getattr(usage, "requests", 0) or 0))
+        pipe.hincrby(key, f"{agente}:tokens_entrada", entrada)
+        pipe.hincrby(key, f"{agente}:tokens_salida", salida)
+        pipe.hincrby(key, f"{agente}:tokens_total", total)
+        pipe.hincrby(key, f"{agente}:requests", requests)
         pipe.hincrby(key, f"{agente}:turnos", 1)
         pipe.hincrby(key, f"{agente}:duracion_ms", int(duracion_ms))
         pipe.expire(key, TTL_SEGUNDOS)
+        if chat_id:
+            # Mismo desglose pero de ESA conversación: cuál gastó más y con qué agente.
+            kc = _key_chat(chat_id)
+            pipe.hincrby(kc, f"{agente}:tokens_entrada", entrada)
+            pipe.hincrby(kc, f"{agente}:tokens_salida", salida)
+            pipe.hincrby(kc, f"{agente}:tokens_total", total)
+            pipe.hincrby(kc, f"{agente}:requests", requests)
+            pipe.hincrby(kc, f"{agente}:turnos", 1)
+            pipe.hincrby(kc, f"{agente}:duracion_ms", int(duracion_ms))
+            pipe.expire(kc, TTL_POR_CHAT)
+            # Ranking, para no tener que escanear todas las conversaciones.
+            pipe.zincrby(_key_ranking(), total, chat_id)
+            pipe.zremrangebyrank(_key_ranking(), 0, -(MAX_CHATS_RANKEADOS + 1))
+            pipe.expire(_key_ranking(), TTL_POR_CHAT)
         return await pipe.execute()
 
     try:
@@ -100,4 +135,81 @@ async def resumen(dias: int = 7) -> dict:
         for c in _CAMPOS:
             total_general[c] += fila[c]
 
-    return {"dias": por_dia, "por_agente": totales_por_agente, "total": total_general}
+    return {
+        "dias": por_dia,
+        "por_agente": totales_por_agente,
+        "total": total_general,
+        "chats": await top_chats(),
+    }
+
+
+def _desglosar(crudo: dict) -> tuple[dict[str, dict[str, int]], dict[str, int]]:
+    """Pasa de los campos planos de Redis (`agente:campo`) a {agente: {campo: n}} más
+    el total. Es el mismo formato que devuelve `resumen`, así la UI no aprende dos."""
+    por_agente: dict[str, dict[str, int]] = {}
+    for campo, valor in (crudo or {}).items():
+        agente, _, sufijo = campo.rpartition(":")
+        if not agente or sufijo not in _CAMPOS:
+            continue
+        por_agente.setdefault(agente, _fila_vacia())[sufijo] += int(valor)
+    total = _fila_vacia()
+    for fila in por_agente.values():
+        for c in _CAMPOS:
+            total[c] += fila[c]
+    return por_agente, total
+
+
+async def por_chat(chat_id: str) -> dict:
+    """Lo que gastó UNA conversación, con el desglose por agente. Para responder
+    "¿por qué esta conversación salió caples?" sin adivinar."""
+    if not chat_id:
+        return {"por_agente": {}, "total": _fila_vacia()}
+    try:
+        crudo = await with_reconnect(lambda r: r.hgetall(_key_chat(chat_id)))
+    except Exception as exc:  # noqa: BLE001
+        log.warning("uso_por_chat_fallo", chat_id=chat_id, error=str(exc))
+        crudo = {}
+    por_agente, total = _desglosar(crudo)
+    return {"por_agente": por_agente, "total": total}
+
+
+async def top_chats(limite: int = 15) -> list[dict]:
+    """Las conversaciones que más gastaron, de mayor a menor. Sale del ZSET para no
+    tener que escanear una key por conversación."""
+    limite = max(1, min(limite, MAX_CHATS_RANKEADOS))
+    try:
+        ids = await with_reconnect(
+            lambda r: r.zrevrange(_key_ranking(), 0, limite - 1)
+        )
+    except Exception as exc:  # noqa: BLE001
+        log.warning("uso_top_chats_fallo", error=str(exc))
+        return []
+
+    async def _leer(r):
+        pipe = r.pipeline()
+        for cid in ids or []:
+            pipe.hgetall(_key_chat(cid))
+        return await pipe.execute()
+
+    if not ids:
+        return []
+    try:
+        crudos = await with_reconnect(_leer)
+    except Exception as exc:  # noqa: BLE001
+        log.warning("uso_top_chats_detalle_fallo", error=str(exc))
+        return []
+
+    out: list[dict] = []
+    for cid, crudo in zip(ids, crudos):
+        # La entrada del ranking puede sobrevivir al hash (TTL distinto): si ya no hay
+        # desglose, la conversación venció y no se muestra un cero engañoso.
+        if not crudo:
+            continue
+        por_agente, total = _desglosar(crudo)
+        out.append({
+            "chat_id": cid,
+            "agentes": sorted(por_agente.keys()),
+            "por_agente": por_agente,
+            **total,
+        })
+    return out

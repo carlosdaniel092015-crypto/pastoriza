@@ -128,7 +128,11 @@ día y por agente. Se acumula con `HINCRBY` en una key por día (`pastoriza:pane
 techo, y el panel sólo necesita totales. Lo registra `_registrar_uso` (pipeline) leyendo
 `result.context_wrapper.usage` del SDK, y **nunca puede tumbar el turno**: un fallo ahí sólo
 pierde la métrica. NO va por canal (una sola cuenta de OpenAI, un solo servidor). El detalle
-por turno igual queda en los logs (`turno_uso`).
+por turno igual queda en los logs (`turno_uso`). También **por conversación**
+(`pastoriza:panel:uso:chat:<chat_id>`, TTL 7 días como la sesión) con el desglose
+entrada/salida por agente, más un ZSET de ranking (`uso:chats`, tope 300) para no escanear una
+key por cliente: así se puede ver CUÁL conversación se come los tokens y con qué agente
+(no es lo mismo `ventas` en mini que `pedido` en gpt-4o).
 
 **Panel de operación** (`app/panel/`, servido en `/panel`, protegido con `PANEL_TOKEN`): CRM en
 vivo, alertas, config, prompts por-agente, aprendizaje, kill-switch global. La UI es una SPA
