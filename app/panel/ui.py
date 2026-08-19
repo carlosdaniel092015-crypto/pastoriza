@@ -152,7 +152,23 @@ PANEL_HTML = r"""<!doctype html>
   .voztxt{display:block;font-style:italic;margin-top:4px}
   /* El audio y la foto van DENTRO de la burbuja del mensaje: es donde se los busca
      para comparar con lo que el bot dijo que entendió. */
-  .vozaud{display:block;width:100%;max-width:260px;height:32px;margin:2px 0}
+  /* Reproductor propio: el nativo quedaba tan apretado dentro de la burbuja que había
+     que abrir el menú del botón derecho para darle play. */
+  .vozp{display:flex;align-items:center;gap:8px;margin:4px 0;padding:6px 10px;
+    background:var(--panel);border:1px solid var(--line);border-radius:999px;max-width:290px}
+  .vozp .vozsrc{display:none}
+  .vozplay{flex:0 0 auto;width:26px;height:26px;border-radius:50%;border:0;cursor:pointer;
+    background:var(--senal);color:#fff;font-size:10px;line-height:1;display:flex;
+    align-items:center;justify-content:center;padding:0}
+  .vozplay:hover{filter:brightness(1.12)}
+  .vozp.son .vozplay{background:var(--senal)}
+  .vozt{font-size:10.5px;color:var(--mut);flex:0 0 auto;min-width:30px;text-align:center}
+  .vozbar{flex:1 1 auto;min-width:50px;height:4px;-webkit-appearance:none;appearance:none;
+    background:var(--line);border-radius:3px;cursor:pointer;margin:0}
+  .vozbar::-webkit-slider-thumb{-webkit-appearance:none;appearance:none;width:11px;height:11px;
+    border-radius:50%;background:var(--senal);cursor:pointer;border:0}
+  .vozbar::-moz-range-thumb{width:11px;height:11px;border-radius:50%;background:var(--senal);
+    cursor:pointer;border:0}
   .fotomsg{display:block;max-width:230px;max-height:230px;width:auto;border-radius:5px;
     margin:6px 0 2px;cursor:zoom-in;border:1px solid var(--line)}
   .fotomsg:hover{opacity:.9}
@@ -1266,8 +1282,48 @@ function buscarMedia(tipo, texto){
   }
   return null;
 }
+// Reproductor PROPIO y no <audio controls>: el nativo se dibuja del ancho que quiere
+// el navegador y dentro de la burbuja quedaba tan apretado que había que abrir el menú
+// del botón derecho para poder darle play.
 function reproductorAudio(m){
-  return m ? `<audio class="vozaud" controls preload="none" data-med="${esc(m.token)}"></audio>` : '';
+  if(!m) return '';
+  return `<div class="vozp">
+    <button class="vozplay" type="button" title="Reproducir" aria-label="Reproducir">▶</button>
+    <span class="vozt mono vozcur">0:00</span>
+    <input class="vozbar" type="range" min="0" max="1000" value="0" aria-label="Posición">
+    <span class="vozt mono vozdur">0:00</span>
+    <audio class="vozsrc" preload="metadata" data-med="${esc(m.token)}"></audio>
+  </div>`;
+}
+function _mmss(s){
+  if(!isFinite(s)||s<0) return '0:00';
+  const m=Math.floor(s/60), x=Math.floor(s%60);
+  return m+':'+String(x).padStart(2,'0');
+}
+// Se llama después de pintar el hilo. Idempotente (marca `listo`): renderMsgs corre
+// varias veces y no hay que apilar listeners sobre el mismo audio.
+function armarReproductores(){
+  document.querySelectorAll('.vozp').forEach(p=>{
+    if(p.dataset.listo) return;
+    p.dataset.listo='1';
+    const a=p.querySelector('.vozsrc'), btn=p.querySelector('.vozplay'),
+          cur=p.querySelector('.vozcur'), dur=p.querySelector('.vozdur'),
+          bar=p.querySelector('.vozbar');
+    btn.onclick=()=>{
+      // Dos notas de voz sonando a la vez no se entiende ninguna.
+      document.querySelectorAll('.vozsrc').forEach(o=>{ if(o!==a) o.pause(); });
+      if(a.paused) a.play().catch(()=>{}); else a.pause();
+    };
+    a.addEventListener('play',()=>{ btn.textContent='❚❚'; btn.title='Pausar'; p.classList.add('son'); });
+    a.addEventListener('pause',()=>{ btn.textContent='▶'; btn.title='Reproducir'; p.classList.remove('son'); });
+    a.addEventListener('ended',()=>{ bar.value=0; cur.textContent='0:00'; });
+    a.addEventListener('loadedmetadata',()=>{ dur.textContent=_mmss(a.duration); });
+    a.addEventListener('timeupdate',()=>{
+      cur.textContent=_mmss(a.currentTime);
+      if(a.duration) bar.value=Math.round((a.currentTime/a.duration)*1000);
+    });
+    bar.oninput=()=>{ if(a.duration) a.currentTime=(bar.value/1000)*a.duration; };
+  });
 }
 function fotoEnBurbuja(m){
   return m ? `<img class="fotomsg" data-med="${esc(m.token)}" alt="foto que mandó el cliente"
@@ -1293,6 +1349,7 @@ function renderMsgs(items){
     // igual se muestran, si no el operador no ve que el cliente mandó algo.
     const sueltos=curMedia.map(m=>burbujaMediaSuelta(m)).join('');
     el.innerHTML = sueltos || '<div class="empty">Sin mensajes.</div>';
+    armarReproductores();
     return;
   }
   const filas=items.map(it=>{
@@ -1336,6 +1393,7 @@ function renderMsgs(items){
     filas.splice(donde<0?filas.length:donde, 0, {ts:m.ts, html:burbujaMediaSuelta(m)});
   });
   el.innerHTML=filas.map(f=>f.html).join('');
+  armarReproductores();
   el.scrollTop=el.scrollHeight;
 }
 async function editarMsg(idx){ if(!selChat)return;
