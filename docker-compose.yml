@@ -24,6 +24,12 @@ services:
       # Sólo expuesto en localhost: el tráfico entra por Traefik o por el
       # Cloudflare Tunnel. Nunca abras esto a 0.0.0.0 en el VPS.
       - "127.0.0.1:8000:8000"
+    volumes:
+      # Copia de las fotos y notas de voz de los clientes, para verlas en el panel
+      # (app/panel/media_chat.py). Volumen y NO Redis a propósito: en Redis vive la
+      # config del negocio con noeviction, y llenarla de fotos haría fallar
+      # escrituras reales. Si el volumen se pierde, sólo se pierden esas copias.
+      - media-data:/srv/media
     healthcheck:
       test: ["CMD", "curl", "-fsS", "http://localhost:8000/health"]
       interval: 30s
@@ -83,6 +89,7 @@ services:
 
 volumes:
   redis-data:
+  media-data:
 
 networks:
   dokploy-network:

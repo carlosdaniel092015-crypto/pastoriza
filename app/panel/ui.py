@@ -145,6 +145,20 @@ PANEL_HTML = r"""<!doctype html>
   .sem.amarillo{background:var(--cinta)}
   .sem.cerrado{background:var(--senal);border-radius:2px}
   .sem.gris{background:var(--line)}
+  /* MEDIA DEL CLIENTE: la foto/audio real, aparte de su transcripción o análisis. */
+  .mediastrip{border-bottom:1px solid var(--line);padding:10px 14px;background:var(--panel)}
+  .medh{font-size:11.5px;color:var(--mut);text-transform:uppercase;letter-spacing:.04em;margin-bottom:8px}
+  .medrow{display:flex;gap:10px;overflow-x:auto;padding-bottom:4px}
+  .medit{flex:0 0 auto;max-width:190px;background:var(--panel2);border:1px solid var(--line);
+    border-radius:var(--r);padding:6px}
+  .medit img{display:block;width:100%;max-height:150px;object-fit:cover;border-radius:4px;cursor:zoom-in}
+  .medit img:hover{opacity:.9}
+  .medit audio{width:180px;height:34px}
+  .medts{font-family:var(--mono);font-size:10.5px;color:var(--mut);margin-top:4px}
+  .medpie{font-size:11px;color:var(--mut);line-height:1.35;margin-top:3px;
+    overflow:hidden;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical}
+  .vozlbl{display:block;font-size:11px;color:var(--mut);margin-bottom:2px}
+  .voztxt{display:block;font-style:italic}
   /* MODULO USO: tokens y latencia. */
   .usogrid{display:grid;grid-template-columns:repeat(auto-fit,minmax(190px,1fr));gap:12px;margin-top:14px}
   .usocard{background:var(--panel2);border:1px solid var(--line);border-radius:var(--r);padding:12px 14px}
@@ -458,6 +472,7 @@ PANEL_HTML = r"""<!doctype html>
           </div>
           <div class="thread">
             <div class="thead" id="thead"><div class="row1"><button class="backbtn" onclick="cerrarHilo()" title="Volver">‹</button><div><div class="cn">Elegí una conversación</div></div></div></div>
+            <div class="mediastrip" id="mediastrip" style="display:none"></div>
             <div class="msgs" id="msgs"><div class="empty">Selecciona un chat de la izquierda.</div></div>
             <div class="replyrow" id="replyrow">
               <input id="rin" placeholder="Escribe como asesor (pausa el bot 30 min)…" onkeydown="if(event.key==='Enter')responder()"/>
@@ -589,7 +604,7 @@ PANEL_HTML = r"""<!doctype html>
 <script>
 const $ = s => document.querySelector(s);
 let TOKEN = localStorage.getItem('panel_token') || '';
-let lastEventId=0, selChat=null, chatsCache=[], alertCount=0, alerts=[], filtro='todos', prodMap={}, curItems=[];
+let lastEventId=0, selChat=null, chatsCache=[], alertCount=0, alerts=[], filtro='todos', prodMap={}, curItems=[], curMedia=[];
 const TITULOS={conv:'Conversaciones',alertas:'Alertas',config:'Config',prompt:'Prompt',aprendizaje:'Aprendizaje',semaforo:'Semáforo',uso:'Uso'};
 
 function headers(){ return TOKEN?{'X-Panel-Token':TOKEN,'Content-Type':'application/json'}:{'Content-Type':'application/json'}; }
@@ -981,6 +996,7 @@ function cerrarHilo(){ const c=document.querySelector('.conv'); if(c)c.classList
 async function openChat(id){
   selChat=id; renderChats(); abrirVistaHilo();
   const d=await api('/chats/'+encodeURIComponent(id)); const m=d.meta||{}; curItems=d.items||[];
+  curMedia=d.media||[];
   const canal=(m.telefono?'WhatsApp':'WhatsApp')+' · Santo Domingo';
   const hoy=new Date().toLocaleDateString('es-DO',{day:'2-digit',month:'long'}).toUpperCase();
   // El semáforo se muestra con su desglose: qué hizo este cliente, en sus términos.
@@ -1012,8 +1028,50 @@ async function openChat(id){
   prodMap={};
   if(ids.size){ try{ const pr=await api('/productos?ids='+[...ids].join(',')); (pr.productos||[]).forEach(p=>prodMap[p.id]=p); }catch(e){} }
   renderMsgs(curItems);
+  limpiarBlobs(); pintarMedia();
 }
 function contenidoStr(c){ if(c==null) return ''; if(Array.isArray(c)) return c.map(x=>(x&&(x.text||x.content))||'').join(' '); if(typeof c!=='string'){ try{ return JSON.stringify(c)||''; }catch(e){ return ''; } } return c; }
+// El hilo guarda el TEXTO que se le pasó al modelo, no el archivo. Con la foto
+// convertida en "## ANALISIS VISUAL: TIPO_ENVASE: Botella / ..." no se puede saber si
+// el bot entendió bien lo que le mandaron, así que la foto real va aparte, arriba.
+// Se baja por fetch (no <img src>) porque la ruta pide el token del panel en un header
+// y una etiqueta <img> no puede mandarlo: son fotos de clientes y comprobantes.
+async function pintarMedia(){
+  const el=$('#mediastrip'); if(!el) return;
+  if(!curMedia.length){ el.innerHTML=''; el.style.display='none'; return; }
+  el.style.display='block';
+  const n=curMedia.length;
+  el.innerHTML='<div class="medh">'+n+' archivo(s) que mandó el cliente</div>'+
+    '<div class="medrow">'+curMedia.map((m,i)=>{
+      const pie=m.texto?`<div class="medpie" title="${esc(m.texto)}">${esc(m.texto.slice(0,90))}</div>`:'';
+      const cuerpo=m.tipo==='audio'
+        ? `<audio controls preload="none" id="med${i}"></audio>`
+        : `<img id="med${i}" alt="foto del cliente" loading="lazy">`;
+      return `<div class="medit">${cuerpo}<div class="medts">${fmtTime(m.ts)}</div>${pie}</div>`;
+    }).join('')+'</div>';
+  // Un blob por archivo: se revoca al cambiar de chat para no filtrar memoria.
+  curMedia.forEach(async (m,i)=>{
+    try{
+      const r=await fetch('/panel/api/media/'+encodeURIComponent(m.token),{headers:headers()});
+      if(!r.ok) return;
+      const url=URL.createObjectURL(await r.blob());
+      _blobs.push(url);
+      const nodo=$('#med'+i); if(nodo) nodo.src=url;
+    }catch(e){}
+  });
+}
+let _blobs=[];
+function limpiarBlobs(){ _blobs.forEach(u=>{ try{ URL.revokeObjectURL(u); }catch(e){} }); _blobs=[]; }
+// El andamiaje que el bot le pone al prompt ("# EL CLIENTE ENVIO UNA IMAGEN",
+// "## ANALISIS VISUAL:") es para el modelo, no para quien lee el hilo: se muestra
+// como etiqueta y no como texto crudo con almohadillas.
+function limpiarAndamiaje(t){
+  return (t||'')
+    .replace(/^#+\s*EL CLIENTE ENVIO UNA IMAGEN\s*$/gim,'📷 Mandó una foto')
+    .replace(/^#+\s*LO QUE ESCRIBIO CON LA IMAGEN:\s*/gim,'Escribió con la foto: ')
+    .replace(/^#+\s*ANALISIS VISUAL:\s*$/gim,'Lo que el bot vio:')
+    .replace(/^#+\s+/gm,'');
+}
 function renderMsgs(items){
   const el=$('#msgs');
   if(!items||!items.length){ el.innerHTML='<div class="empty">Sin mensajes.</div>'; return; }
@@ -1023,7 +1081,14 @@ function renderMsgs(items){
     const role=it.role||'assistant'; let raw=contenidoStr(it.content);
     const idx=(it._idx!==undefined&&it._idx!==null)?it._idx:-1;
     const acc=idx>=0?`<span class="msgacc"><button title="Corregir en el historial" onclick="editarMsg(${idx})">✎</button><button title="Borrar del historial" onclick="borrarMsg(${idx})">×</button></span>`:'';
-    if(role==='user') return `<div class="row l"><div class="bub user">${esc(raw)}${acc}</div><div class="btime">${fmtTime(it.ts)}</div></div>`;
+    if(role==='user'){
+      // <audio>transcripción</audio> es cómo el bot le marca al modelo que eso vino de
+      // una nota de voz. En el hilo se muestra como tal, no como una etiqueta suelta.
+      let cuerpo=esc(limpiarAndamiaje(raw)).replace(
+        /&lt;audio&gt;([\s\S]*?)&lt;\/audio&gt;/g,
+        '<span class="vozlbl">🎤 Nota de voz · lo que se entendió</span><span class="voztxt">$1</span>');
+      return `<div class="row l"><div class="bub user">${cuerpo}${acc}</div><div class="btime">${fmtTime(it.ts)}</div></div>`;
+    }
     let msg=raw,chips=[],escal=false,sup=false;
     if(raw.startsWith('[SUPERVISOR]')){ sup=true; msg=raw.replace('[SUPERVISOR]','').trim(); }
     else if(raw.trim().startsWith('{')){ try{ const o=JSON.parse(raw); if(o&&typeof o.mensaje==='string'){ msg=o.mensaje; chips=o.mostrar_productos||[]; escal=!!o.escalar; } }catch(e){} }

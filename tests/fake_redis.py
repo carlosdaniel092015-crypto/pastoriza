@@ -114,7 +114,11 @@ class FakeRedis:
 
     async def ltrim(self, key: str, start: int, stop: int) -> bool:
         if key in self.listas:
-            self.listas[key] = self.listas[key][start : stop + 1]
+            # stop == -1 es "hasta el final" en Redis; con stop+1 daría slice vacío.
+            self.listas[key] = (
+                self.listas[key][start:] if stop == -1
+                else self.listas[key][start : stop + 1]
+            )
         return True
 
     # --- scan ---

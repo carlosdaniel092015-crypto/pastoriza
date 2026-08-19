@@ -27,7 +27,10 @@ COPY app ./app
 COPY scripts ./scripts
 COPY prompts ./prompts
 
-RUN useradd -m -u 10001 bot && chown -R bot:bot /srv
+# /srv/media: copia de las fotos/audios de los clientes para el panel. Tiene que
+# existir y ser del usuario `bot` YA EN LA IMAGEN: Docker hereda esos permisos al
+# montar el volumen, y si no, el volumen queda de root y el bot no puede escribir.
+RUN useradd -m -u 10001 bot && mkdir -p /srv/media && chown -R bot:bot /srv
 USER bot
 
 EXPOSE 8000

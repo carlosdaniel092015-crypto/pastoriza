@@ -32,11 +32,18 @@ from app.estado import (
     tocar_ventana_24h,
 )
 from app.logging_conf import get_logger
-from app.media import analizar_imagen, descargar, mime_de_url, transcribir_audio
+from app.media import (
+    analizar_bytes,
+    analizar_imagen,
+    descargar,
+    mime_de_url,
+    transcribir_audio,
+    transcribir_bytes,
+)
 from app.models import InboundMessage, parse_message_updated, ubicacion_a_texto
 from app.odoo import odoo
 from app.panel import events as panel_events
-from app.panel import uso
+from app.panel import media_chat, uso
 from app.redis_client import conversation_lock
 from app.repeticion import contar_repeticion
 from app.repeticion import reset as reset_repeticion
@@ -271,6 +278,28 @@ async def _fallback_error(msg: InboundMessage) -> None:
         log.exception("fallback_error_fallo", chat_id=msg.chat_id)
 
 
+async def _bajar_para_el_panel(url: str) -> bytes:
+    """Descarga el archivo UNA vez: sirve al modelo y a la copia del panel. Si falla,
+    devuelve b"" y el llamador cae al camino de siempre (bajarlo él mismo)."""
+    try:
+        return await descargar(url)
+    except Exception as exc:  # noqa: BLE001
+        log.warning("media_descarga_fallo", error=str(exc))
+        return b""
+
+
+async def _archivar_para_el_panel(
+    chat_id: str, datos: bytes, mime: str, tipo: str, texto: str
+) -> None:
+    """Guardar la copia para el panel NUNCA puede tumbar la atención al cliente."""
+    if not chat_id:
+        return
+    try:
+        await media_chat.guardar(chat_id, datos, mime, tipo, texto)
+    except Exception as exc:  # noqa: BLE001
+        log.warning("media_chat_archivar_fallo", chat_id=chat_id, error=str(exc))
+
+
 # ------------------------------------------------------------ combinado ---
 async def _combinar(msgs: list[InboundMessage]) -> tuple[str, str, str, bool, str]:
     """Funde la ráfaga en un solo input. Devuelve (texto, tipo, imagen_url, es_comprobante).
@@ -295,20 +324,35 @@ async def _combinar(msgs: list[InboundMessage]) -> tuple[str, str, str, bool, st
         if t:
             partes.append(t)
 
+    chat_id = msgs[0].chat_id if msgs else ""
+
     audios_fallidos = 0
     for a in audios:
-        transcripcion = await transcribir_audio(a.media_url)
+        datos = await _bajar_para_el_panel(a.media_url)
+        transcripcion = (
+            await transcribir_bytes(datos) if datos
+            else await transcribir_audio(a.media_url)
+        )
         if transcripcion:
             partes.append(f"<audio>\n{transcripcion}\n</audio>")
         else:
             audios_fallidos += 1
+        if datos:
+            await _archivar_para_el_panel(
+                chat_id, datos, "audio/ogg", "audio", transcripcion
+            )
 
     imagen_url = ""
     es_comprobante = False
     descripcion = ""
     if imagenes:
         imagen_url = imagenes[0].media_url
-        descripcion, es_comprobante = await analizar_imagen(imagen_url)
+        datos = await _bajar_para_el_panel(imagen_url)
+        mime = mime_de_url(imagen_url)
+        if datos:
+            descripcion, es_comprobante = await analizar_bytes(datos, mime)
+        else:
+            descripcion, es_comprobante = await analizar_imagen(imagen_url)
         bloque = ["# EL CLIENTE ENVIO UNA IMAGEN"]
         # El CAPTION de la imagen es lo que el cliente ESCRIBIÓ ("quiero esta de 8
         # oz"): antes se descartaba (sólo entraban los content_type == "text") y se
@@ -323,6 +367,15 @@ async def _combinar(msgs: list[InboundMessage]) -> tuple[str, str, str, bool, st
                 "si necesitas ver las demas, pidelas de una en una.]"
             )
         partes.append("\n".join(bloque))
+        # TODAS las fotos se archivan (no sólo la analizada): quien opera necesita ver
+        # lo que el cliente mandó de verdad, incluso lo que el modelo no miró.
+        for i, im in enumerate(imagenes):
+            datos_i = datos if i == 0 else await _bajar_para_el_panel(im.media_url)
+            if datos_i:
+                await _archivar_para_el_panel(
+                    chat_id, datos_i, mime_de_url(im.media_url), "imagen",
+                    descripcion if i == 0 else "",
+                )
 
     # Si Whisper falló y el audio era lo ÚNICO que mandó el cliente, sin esto el
     # turno terminaba en "turno_vacio" y el cliente se quedaba esperando para

@@ -52,7 +52,7 @@ from app.estado import (
     set_bot_global,
 )
 from app.logging_conf import get_logger
-from app.panel import agentes_custom, conocimiento, events, prompt_store, uso
+from app.panel import agentes_custom, conocimiento, events, media_chat, prompt_store, uso
 from app.panel.analista import analizar_y_sugerir
 from app.panel.ui import MANIFEST, PANEL_HTML, SERVICE_WORKER
 from app import score
@@ -588,7 +588,30 @@ async def api_chat_hilo(
         "pausado": await bot_pausado(chat_id),
         "meta": meta,
         "items": items,
+        # Las fotos y notas de voz que mandó el cliente. En el hilo sólo se ve el
+        # texto que se le pasó al modelo (transcripción / análisis visual), y con eso
+        # no se puede juzgar si el bot entendió bien lo que le mandaron.
+        "media": await media_chat.listar(chat_id),
     }
+
+
+@panel_router.get("/api/media/{token}")
+async def api_media(
+    token: str, x_panel_token: str | None = Header(default=None)
+) -> Response:
+    """Sirve una foto/audio del cliente. CON auth (a diferencia de `/panel/media/...`,
+    que es sin token porque ahí tiene que entrar Meta): esto son fotos de clientes y
+    comprobantes de pago, no se publican en internet."""
+    _auth(x_panel_token)
+    archivo = media_chat.leer(token)
+    if archivo is None:
+        raise HTTPException(status_code=404, detail="archivo no encontrado")
+    content_type, data = archivo
+    return Response(
+        content=data,
+        media_type=content_type,
+        headers={"Cache-Control": "private, max-age=3600"},
+    )
 
 
 @panel_router.patch("/api/chats/{chat_id}/mensajes/{indice}")

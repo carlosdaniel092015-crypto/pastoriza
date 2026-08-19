@@ -43,7 +43,7 @@ from app.models import (
     parse_outbound_command,
 )
 from app.odoo import odoo
-from app.panel import agentes_custom, conocimiento, prompt_store, telegram
+from app.panel import agentes_custom, conocimiento, media_chat, prompt_store, telegram
 from app.panel.analista import analizar_y_sugerir
 from app.panel.router import panel_router
 from app.pipeline import manejar_entrante, manejar_saliente, precalentar
@@ -164,6 +164,9 @@ async def lifespan(app: FastAPI):
     await prompt_store.cargar()
     await conocimiento.cargar()
     await _revisar_canales()
+    # El TTL de Redis vence la ENTRADA del índice, no el ARCHIVO: sin esta pasada el
+    # volumen de media crecería para siempre.
+    await asyncio.to_thread(media_chat.limpiar_viejos)
 
     tareas: list[asyncio.Task] = []
     if settings.analista_auto:

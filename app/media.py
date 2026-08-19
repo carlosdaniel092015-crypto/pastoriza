@@ -150,7 +150,12 @@ async def convertir_audio_ogg(data: bytes) -> bytes:
 
 
 async def transcribir_audio(url: str) -> str:
-    data = await descargar(url)
+    return await transcribir_bytes(await descargar(url))
+
+
+async def transcribir_bytes(data: bytes) -> str:
+    """Igual que `transcribir_audio` pero con el archivo ya descargado: el panel
+    guarda una copia del audio y no tiene sentido bajarlo dos veces."""
     nombre = "audio.ogg"
     try:
         resp = await _openai.audio.transcriptions.create(
@@ -215,8 +220,17 @@ def es_comprobante_de(texto: str) -> bool:
 async def analizar_imagen(url: str) -> tuple[str, bool]:
     """Devuelve (descripción, es_comprobante)."""
     try:
-        data = await descargar(url)
-        texto = await _vision(PROMPT_IMAGEN, data, mime_de_url(url))
+        return await analizar_bytes(await descargar(url), mime_de_url(url))
+    except Exception as exc:  # noqa: BLE001
+        log.error("analisis_imagen_fallo", error=str(exc))
+        return "", False
+
+
+async def analizar_bytes(data: bytes, mime: str = "image/jpeg") -> tuple[str, bool]:
+    """Igual que `analizar_imagen` pero con el archivo ya descargado: el panel guarda
+    una copia de la foto y no tiene sentido bajarla dos veces."""
+    try:
+        texto = await _vision(PROMPT_IMAGEN, data, mime)
         return texto, es_comprobante_de(texto)
     except Exception as exc:  # noqa: BLE001
         log.error("analisis_imagen_fallo", error=str(exc))
