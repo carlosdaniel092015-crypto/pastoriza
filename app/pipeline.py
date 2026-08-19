@@ -675,7 +675,7 @@ def _monto_minimo(cfg) -> float:
 
 
 async def _registrar_uso(
-    agente: str, result, duracion_ms: float, chat_id: str = ""
+    agente: str, result, duracion_ms: float, chat_id: str = "", modelo: str = ""
 ) -> None:
     """Tokens y latencia del turno, para el módulo Uso del panel. Va en su propia
     función porque NO puede tumbar el turno: una métrica perdida no vale una
@@ -685,6 +685,7 @@ async def _registrar_uso(
         "turno_uso",
         agente=agente,
         chat_id=chat_id,
+        modelo=modelo,
         duracion_ms=round(duracion_ms),
         tokens_entrada=getattr(usage, "input_tokens", 0),
         tokens_salida=getattr(usage, "output_tokens", 0),
@@ -694,7 +695,7 @@ async def _registrar_uso(
     if usage is None:
         return
     try:
-        await uso.registrar(agente, usage, duracion_ms, chat_id)
+        await uso.registrar(agente, usage, duracion_ms, chat_id, modelo)
     except Exception as exc:  # noqa: BLE001
         log.warning("uso_registrar_fallo", agente=agente, error=str(exc))
 
