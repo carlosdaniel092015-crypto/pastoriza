@@ -52,7 +52,15 @@ from app.estado import (
     set_bot_global,
 )
 from app.logging_conf import get_logger
-from app.panel import agentes_custom, conocimiento, events, media_chat, prompt_store, uso
+from app.panel import (
+    agentes_custom,
+    conocimiento,
+    events,
+    media_chat,
+    prompt_store,
+    supervisor_log,
+    uso,
+)
 from app.panel.analista import analizar_y_sugerir
 from app.panel.ui import MANIFEST, PANEL_HTML, SERVICE_WORKER
 from app import score
@@ -432,6 +440,23 @@ async def api_asignar_canal(
         detalle=f"{len(huerfanos)} conversación(es) sin canal asignadas a {nombre_canal(c)}",
     )
     return {"ok": True, "asignadas": len(huerfanos), "canal": c}
+
+
+@panel_router.get("/api/supervisor")
+async def api_supervisor(
+    limite: int = 100, x_panel_token: str | None = Header(default=None)
+) -> dict:
+    """Lo que el bot le mandó al SUPERVISOR (ADMIN_PHONE). No aparece en las
+    conversaciones porque ésas son con clientes, y sin esto no había forma de ver si
+    al supervisor le llegó el aviso de un pedido ni qué decía."""
+    _auth(x_panel_token)
+    entradas = await supervisor_log.listar(limite)
+    return {
+        "numero": settings.admin_phone,
+        "total": len(entradas),
+        "sin_entregar": sum(1 for e in entradas if not e.get("enviado")),
+        "mensajes": entradas,
+    }
 
 
 @panel_router.get("/api/uso")

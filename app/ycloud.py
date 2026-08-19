@@ -305,14 +305,30 @@ class YCloud:
         return bool(data)
 
     async def avisar_admin(self, emisor: str, texto: str) -> None:
-        await self._post(
-            {
-                "from": emisor,
-                "to": settings.admin_phone,
-                "type": "text",
-                "text": {"body": texto[:4000]},
-            }
-        )
+        enviado = True
+        try:
+            await self._post(
+                {
+                    "from": emisor,
+                    "to": settings.admin_phone,
+                    "type": "text",
+                    "text": {"body": texto[:4000]},
+                }
+            )
+        except Exception:
+            enviado = False
+            raise
+        finally:
+            # Import perezoso: `panel` es una capa de arriba, no una dependencia de
+            # ycloud. Y el registro no puede impedir el aviso, así que se traga el fallo.
+            try:
+                from app.panel import supervisor_log
+
+                await supervisor_log.registrar(
+                    "aviso", emisor=emisor, texto=texto, enviado=enviado
+                )
+            except Exception:  # noqa: BLE001
+                pass
 
 
 ycloud = YCloud()

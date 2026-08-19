@@ -113,6 +113,25 @@ def parametros(
     ]
 
 
+_ETIQUETAS = (
+    "Pedido", "Modalidad", "Cliente", "Dirección", "Productos",
+    "Subtotal", "ITBIS", "Envío", "TOTAL",
+)
+
+
+def resumen_legible(params: list[str]) -> str:
+    """Las variables de la plantilla como texto con etiquetas, para el panel.
+
+    La plantilla vive en Meta, así que el bot NO tiene su texto: sólo manda las 9
+    variables. Sin esto, el módulo "Al supervisor" mostraría nueve valores sueltos y
+    quien opera no sabría cuál es el total y cuál el subtotal.
+    """
+    return "\n".join(
+        f"{etiqueta}: {valor}"
+        for etiqueta, valor in zip(_ETIQUETAS, params or [])
+    )
+
+
 def payload(accion: str, chat_id: str, order_id: int) -> str:
     """Lo que viaja en el botón y vuelve cuando el supervisor lo toca (tope 128)."""
     return f"{accion}:{chat_id}:{order_id}"[:128]
