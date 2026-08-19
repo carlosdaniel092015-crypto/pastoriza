@@ -159,6 +159,23 @@ PANEL_HTML = r"""<!doctype html>
     overflow:hidden;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical}
   .vozlbl{display:block;font-size:11px;color:var(--mut);margin-bottom:2px}
   .voztxt{display:block;font-style:italic}
+  /* MODULO "AL SUPERVISOR": lo que el bot le manda al ADMIN_PHONE. */
+  .stat.sup{cursor:pointer}
+  .stat.sup:hover b{text-decoration:underline}
+  .suplist{display:flex;flex-direction:column;gap:10px;margin-top:14px}
+  .supit{background:var(--panel2);border:1px solid var(--line);border-radius:var(--r);padding:11px 13px}
+  .supit.ko{border-color:var(--err)}
+  .suptop{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:6px}
+  .suptipo{font-size:12.5px;font-weight:600}
+  .supchip{font-size:11px;color:var(--mut);background:var(--panel);border:1px solid var(--line);
+    border-radius:3px;padding:1px 6px}
+  .supest{font-size:11px;margin-left:auto}
+  .supest.ok{color:var(--ok,#7BAF6B)} .supest.bad{color:var(--err)}
+  .supts{font-size:11px;color:var(--mut)}
+  .supquien{font-size:12px;color:var(--mut);margin-bottom:5px}
+  .suptxt{font-family:var(--mono);font-size:11.5px;line-height:1.5;white-space:pre-wrap;word-break:break-word;
+    background:var(--panel);border:1px solid var(--line);border-radius:4px;padding:8px 10px;margin:0}
+  .supdet{font-size:11.5px;color:var(--err);margin-top:6px;line-height:1.4}
   /* MODULO USO: tokens y latencia. */
   .usogrid{display:grid;grid-template-columns:repeat(auto-fit,minmax(190px,1fr));gap:12px;margin-top:14px}
   .usocard{background:var(--panel2);border:1px solid var(--line);border-radius:var(--r);padding:12px 14px}
@@ -432,6 +449,7 @@ PANEL_HTML = r"""<!doctype html>
       <span class="stat acc"><b id="stAsesor">0</b>con asesor</span>
       <span class="stat rev"><b id="stRev">0</b>revisar</span>
       <span class="stat acc"><b id="stPago">0</b>por aprobar</span>
+      <span class="stat sup" onclick="verSupervisor()" title="Lo que el bot le mandó al supervisor por WhatsApp"><b id="stSup">0</b>al supervisor</span>
     </div>
     <span class="sp"></span>
     <span class="htime" id="htime"></span>
@@ -462,6 +480,7 @@ PANEL_HTML = r"""<!doctype html>
       <button class="it" data-v="aprendizaje"><span class="n">05</span>Aprendizaje<span class="badge" id="badgeSug" style="display:none">0</span></button>
       <button class="it" data-v="semaforo"><span class="n">06</span>Semáforo<span class="badge verde" id="badgeSem" style="display:none">0</span></button>
       <button class="it" data-v="uso"><span class="n">07</span>Uso</button>
+      <button class="it" data-v="supervisor"><span class="n">08</span>Al supervisor<span class="badge" id="badgeSup" style="display:none">0</span></button>
       <div class="foot"><button class="themebtn" onclick="toggleTheme()" id="themebtn" title="Cambiar tema">☾</button><div class="ver mono" id="ver" title="Versión que está corriendo en el servidor">—</div></div>
     </nav>
 
@@ -599,6 +618,18 @@ PANEL_HTML = r"""<!doctype html>
           <div id="usobody"></div>
         </div>
       </section>
+      <!-- Al supervisor: lo que el bot le manda al ADMIN_PHONE por WhatsApp -->
+      <section class="view" id="v-supervisor">
+        <div class="pane">
+          <h2>Lo que el bot le manda al supervisor</h2>
+          <div class="sub" id="supsub">Las conversaciones del panel son con clientes, así que estos mensajes no salen ahí. Acá se ve qué se le mandó al supervisor, de qué pedido, y si llegó.</div>
+          <div class="filters">
+            <button class="btn sec sm" onclick="loadSupervisor()">Actualizar</button>
+            <span class="meta" id="supmsg"></span>
+          </div>
+          <div id="supbody"></div>
+        </div>
+      </section>
     </main>
   </div>
 </div>
@@ -608,7 +639,7 @@ PANEL_HTML = r"""<!doctype html>
 const $ = s => document.querySelector(s);
 let TOKEN = localStorage.getItem('panel_token') || '';
 let lastEventId=0, selChat=null, chatsCache=[], alertCount=0, alerts=[], filtro='todos', prodMap={}, curItems=[], curMedia=[];
-const TITULOS={conv:'Conversaciones',alertas:'Alertas',config:'Config',prompt:'Prompt',aprendizaje:'Aprendizaje',semaforo:'Semáforo',uso:'Uso'};
+const TITULOS={conv:'Conversaciones',alertas:'Alertas',config:'Config',prompt:'Prompt',aprendizaje:'Aprendizaje',semaforo:'Semáforo',uso:'Uso',supervisor:'Al supervisor'};
 
 function headers(){ return TOKEN?{'X-Panel-Token':TOKEN,'Content-Type':'application/json'}:{'Content-Type':'application/json'}; }
 async function api(path,opt){ const r=await fetch('/panel/api'+path,{headers:headers(),...(opt||{})});
@@ -636,6 +667,7 @@ document.querySelectorAll('nav.side .it').forEach(b=>b.onclick=()=>{
   if(b.dataset.v==='config') loadCfg(); if(b.dataset.v==='prompt') loadPrompt(); if(b.dataset.v==='aprendizaje') loadAprendizaje();
   if(b.dataset.v==='semaforo') renderSemaforo();
   if(b.dataset.v==='uso') loadUso(usoDias);
+  if(b.dataset.v==='supervisor') loadSupervisor();
   marcarComun();  // el aviso de "esto es común a los dos canales" se re-pinta al entrar
   if(b.dataset.v==='alertas'){ alertCount=0; renderBadge(); if(b.dataset.filtro){ setFiltro(b.dataset.filtro); } }
 });
@@ -660,6 +692,8 @@ async function loadStats(){
   // La cola de revisión también es del canal elegido (si no, el contador del header
   // mostraría casos del otro número).
   try{ const r=await apiC('/revision?limite=200'); $('#stRev').textContent=r.total||0; }catch(e){}
+  // Lo mandado al supervisor NO va por canal: es un solo número de supervisor.
+  try{ const s=await api('/supervisor?limite=400'); pintarBadgeSup(s.sin_entregar||0,s.total||0); }catch(e){}
 }
 
 // conversaciones
@@ -842,6 +876,58 @@ async function calcularSemaforo(rehacer){
     if(msg) msg.innerHTML=`<span class="ok">Listo: ${d.calculadas||0} calculada(s), ${d.con_senales||0} con señales.</span>`;
     _chatsSig=''; await loadChats(); renderSemaforo();
   }catch(e){ if(msg) msg.innerHTML='<span class="bad">No se pudo calcular: '+esc(String(e))+'</span>'; }
+}
+// ---- Módulo "Al supervisor" ----
+// El panel muestra conversaciones con CLIENTES, así que la plantilla de aprobación que
+// el bot le manda al supervisor no aparecía en ninguna parte: si Meta la rechazaba, el
+// síntoma era que no llegaba nada y no había dónde mirar.
+const TIPO_SUP={aprobacion:'Plantilla de aprobación',aviso:'Aviso',comprobante:'Comprobante',rechazo_motivo:'Motivo de rechazo'};
+function verSupervisor(){ const b=document.querySelector('nav.side .it[data-v="supervisor"]'); if(b) b.click(); }
+async function loadSupervisor(){
+  const msg=$('#supmsg'), body=$('#supbody');
+  if(msg) msg.textContent='Leyendo…';
+  try{
+    const d=await api('/supervisor');
+    if(msg) msg.textContent='';
+    const sub=$('#supsub');
+    if(sub&&d.numero) sub.innerHTML='Todo esto salió hacia <b class="mono">'+esc(d.numero)+'</b>. '+
+      'Las conversaciones del panel son con clientes, así que estos mensajes no salen ahí.';
+    if(body) body.innerHTML=renderSupervisor(d);
+    pintarBadgeSup(d.sin_entregar||0, d.total||0);
+  }catch(e){ if(msg) msg.innerHTML='<span class="bad">No se pudo leer: '+esc(String(e))+'</span>'; }
+}
+function pintarBadgeSup(sinEntregar,total){
+  const st=$('#stSup'); if(st) st.textContent=total;
+  const b=$('#badgeSup');
+  if(b){ b.textContent=sinEntregar; b.style.display=sinEntregar?'inline-block':'none'; }
+}
+function renderSupervisor(d){
+  const ms=d.mensajes||[];
+  if(!ms.length) return '<div class="empty">Todavía no se le mandó nada al supervisor en este período. '+
+    'Acá van a aparecer las plantillas de aprobación de pedidos y los avisos de escalamiento.</div>';
+  const alerta=(d.sin_entregar||0)
+    ? `<div class="comun" style="display:block;margin-bottom:12px;border-color:var(--err)">
+       <b>${d.sin_entregar} mensaje(s) NO se pudieron entregar.</b> Un aviso que no llegó es un pedido
+       esperando aprobación que el supervisor no sabe que existe: revisalos abajo y aprobá desde el panel.</div>`
+    : '';
+  return alerta+'<div class="suplist">'+ms.map(m=>{
+    const ko=!m.enviado;
+    const quien=m.cliente||m.chat_id||'';
+    const link=m.chat_id?`<button class="lnk mono" onclick="irAlChat('${esc(m.chat_id)}')">${esc(quien)}</button>`:esc(quien);
+    return `<div class="supit ${ko?'ko':''}">
+      <div class="suptop">
+        <span class="suptipo">${esc(TIPO_SUP[m.tipo]||m.tipo||'')}</span>
+        ${m.plantilla?`<span class="supchip mono">${esc(m.plantilla)}</span>`:''}
+        ${m.order_id?`<span class="supchip">pedido #${esc(String(m.order_id))}</span>`:''}
+        ${m.con_pago===false?'<span class="supchip">retiro, sin comprobante</span>':''}
+        <span class="supest ${ko?'bad':'ok'}">${ko?'✕ no llegó':'✓ entregado'}</span>
+        <span class="supts mono">${fmtDay(m.ts)} ${fmtTime(m.ts)}</span>
+      </div>
+      ${quien?`<div class="supquien">Cliente: ${link}</div>`:''}
+      ${m.texto?`<pre class="suptxt">${esc(m.texto)}</pre>`:''}
+      ${m.detalle?`<div class="supdet">${esc(m.detalle)}</div>`:''}
+    </div>`;
+  }).join('')+'</div>';
 }
 // ---- Módulo Uso: tokens y latencia ----
 // El gasto NO va por canal a propósito: es una sola cuenta de OpenAI y un solo

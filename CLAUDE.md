@@ -110,6 +110,17 @@ de alta las plantillas en Meta una vez: **`PLANTILLA_META.md`** tiene el texto e
 texto cambia, rehacé los topes de `MAX_*` en `aprobacion.py` (el cuerpo no pasa de 1024). El comprobante se republica en `/panel/media/...`
 (`app/media_publica.py`) porque las URLs de YCloud exigen `X-API-Key` y Meta no puede bajarlas.
 
+**Al supervisor (`app/panel/supervisor_log.py`, módulo **08 Al supervisor**):** el panel muestra
+conversaciones con CLIENTES, así que lo que el bot le manda al `ADMIN_PHONE` (la plantilla de
+aprobación con los botones, los avisos de escalamiento) no se veía en ninguna parte — y si Meta
+rechaza la plantilla, el síntoma es justamente que NO llega nada y no hay dónde mirar. Se anota
+en una lista capada (`pastoriza:panel:supervisor`, 400 entradas, TTL 30 días) desde
+`pagos.avisar_supervisor` y `ycloud.avisar_admin`, con `enviado: bool`; el contador del header
+("al supervisor") y el badge del módulo muestran los que NO se entregaron, porque un aviso que no
+llegó es un pedido esperando aprobación que el supervisor no sabe que existe. La plantilla vive
+en Meta (el bot sólo manda las 9 variables), así que `aprobacion.resumen_legible` las etiqueta
+para que en el panel no se vean nueve valores sueltos. Registrar NUNCA puede impedir el envío.
+
 **Media del cliente (`app/panel/media_chat.py`):** el hilo del panel guarda el TEXTO que
 se le pasó al modelo (transcripción del audio, análisis visual de la foto), así que una foto
 se veía como `## ANALISIS VISUAL: TIPO_ENVASE: Botella...` y una nota de voz sólo como su

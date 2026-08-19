@@ -30,7 +30,7 @@ from app.estado import (
 )
 from app.logging_conf import get_logger
 from app.media import descargar, mime_de_url
-from app.panel import events
+from app.panel import events, supervisor_log
 from app.session import RedisSession
 from app.settings import settings
 from app.ycloud import ycloud
@@ -141,6 +141,24 @@ async def avisar_supervisor(
             "aviso_aprobacion_rechazado",
             chat_id=chat_id, order_id=order_id, plantilla=plantilla,
         )
+    # Queda en el módulo "Al supervisor" del panel: es el ÚNICO lugar donde se puede
+    # ver qué se le mandó al 6701 y si llegó (el panel muestra chats de clientes).
+    await supervisor_log.registrar(
+        "aprobacion",
+        chat_id=chat_id,
+        cliente=cliente,
+        emisor=emisor,
+        plantilla=plantilla,
+        order_id=order_id,
+        enviado=ok,
+        texto=aprobacion.resumen_legible(params),
+        con_pago=bool(imagen_url),
+        detalle="" if ok else (
+            "Meta/YCloud rechazó el envío. Lo más común: la plantilla todavía no está "
+            "aprobada o el nombre no coincide (ver PLANTILLA_META.md). El pedido igual "
+            "quedó pendiente en el panel."
+        ),
+    )
     return ok
 
 
