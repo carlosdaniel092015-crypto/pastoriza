@@ -48,7 +48,7 @@ from app.redis_client import conversation_lock
 from app.repeticion import contar_repeticion
 from app.repeticion import reset as reset_repeticion
 from app.router import respuesta_directa
-from app import pagos, score
+from app import aprobacion, pagos, score
 from app.session import RedisSession
 from app.settings import settings
 from app.ycloud import ycloud
@@ -566,7 +566,7 @@ async def procesar_turno(
         await ycloud.enviar_texto(destino, emisor, mensaje)
 
     await tocar_ventana_24h(chat_id)
-    await _efectos(ctx, respuesta, mensaje, trigger)
+    await _efectos(ctx, respuesta, mensaje, trigger, _texto_del_cliente(texto, trigger))
 
     # Pedido que espera aprobación: TODOS. Con pago atrás en envío (el comprobante pudo
     # llegar en un turno anterior, ver estado.leer_comprobante) y sin pago en retiro. El
@@ -845,11 +845,49 @@ def _resolver_fotos(
 
 
 # -------------------------------------------------------------- efectos ---
+RE_BLOQUE_AUDIO = re.compile(r"<audio>\s*(.*?)\s*</audio>", re.S)
+RE_ANDAMIAJE = re.compile(
+    r"^#+\s*(EL CLIENTE ENVIO UNA IMAGEN|ANALISIS VISUAL:).*$", re.MULTILINE | re.IGNORECASE
+)
+RE_CAPTION = re.compile(
+    r"^#+\s*LO QUE ESCRIBIO CON LA IMAGEN:\s*", re.MULTILINE | re.IGNORECASE
+)
+
+
+def _texto_del_cliente(texto: str, trigger: InboundMessage) -> str:
+    """Lo que el CLIENTE dijo, legible, para el aviso al supervisor.
+
+    NUNCA la respuesta del bot. Antes esto era `trigger.content or mensaje`, y como una
+    nota de voz o una foto no traen `content`, caía al fallback: el supervisor recibía
+    "Ya le avisé al supervisor y deberían contactarte pronto" — o sea, lo que el bot
+    acababa de contestar. Inútil para saber qué necesita el cliente.
+
+    También hay que sacarle el andamiaje del prompt y los saltos de línea: una variable
+    de plantilla de Meta no admite ni \\n ni tabs (ver aprobacion.una_linea).
+    """
+    t = texto or ""
+    # Nota de voz: se queda la transcripción, marcada como tal para que el supervisor
+    # sepa que el cliente habló y no escribió.
+    t = RE_BLOQUE_AUDIO.sub(lambda m: f"(nota de voz) {m.group(1)}", t)
+    if "EL CLIENTE ENVIO UNA IMAGEN" in t.upper():
+        # El análisis visual es la lectura del MODELO, no lo que dijo el cliente, y es
+        # largo. El supervisor va a abrir el WhatsApp y ver la foto igual.
+        t = t.split("## ANALISIS VISUAL:")[0]
+        t = RE_CAPTION.sub("", RE_ANDAMIAJE.sub("", t)).strip()
+        t = f"(mandó una foto) {t}".strip()
+    t = RE_ANDAMIAJE.sub("", t).strip()
+    # Fallbacks en orden: el texto del disparador, y recién al final algo neutro. El
+    # mensaje del bot NO es opción.
+    limpio = aprobacion.una_linea(t or trigger.content or "", 260)
+    return limpio if limpio != "-" else "(el cliente pidió hablar con una persona)"
+
+
 async def _efectos(
     ctx: ConversationContext,
     respuesta: RespuestaBot,
     mensaje: str,
     trigger: InboundMessage,
+    texto_cliente: str = "",
 ) -> None:
     # 1. Pedido creado -> avisar al admin y adjuntar el comprobante en Odoo.
     if ctx.order_id:
@@ -903,7 +941,8 @@ async def _efectos(
             [
                 ctx.user_name or "Sin nombre",
                 ctx.telefono or ctx.chat_id,
-                trigger.content or mensaje,
+                # Lo que dijo el CLIENTE, no lo que contestó el bot.
+                texto_cliente or _texto_del_cliente("", trigger),
             ],
         )
         await ycloud.enviar_texto(
