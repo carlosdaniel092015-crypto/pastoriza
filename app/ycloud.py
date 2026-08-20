@@ -22,6 +22,59 @@ _MSG_URL = f"{settings.ycloud_base_url.rstrip('/')}/whatsapp/messages"
 _RE_LISTA = re.compile(r"^\s*\d+\.\s", re.MULTILINE)
 
 
+def _solo_digitos(n: str) -> str:
+    return re.sub(r"\D", "", str(n or ""))[-10:]
+
+
+# Qué plantilla es cuál, para que el panel no muestre un nombre técnico suelto. Las
+# etiquetas de las variables dependen de la plantilla: vive en Meta, el bot sólo manda
+# los valores (ver PLANTILLA_META.md).
+_ETIQUETAS_PLANTILLA: dict[str, tuple[str, ...]] = {
+    "alerta_supervisor_cliente": ("Cliente", "Número", "Lo que pidió"),
+    "notificar_pedido_creado": ("Cliente", "Número", "Detalle"),
+}
+
+
+async def _registrar_si_es_al_supervisor(
+    telefono: str, emisor: str, plantilla: str, parametros: list[str], enviado: bool
+) -> None:
+    """Anota en el panel las plantillas que van al ADMIN_PHONE. Nunca puede impedir el
+    envío ni propagar: el registro vale menos que el aviso."""
+    if _solo_digitos(telefono) != _solo_digitos(settings.admin_phone):
+        return
+    try:
+        # Import perezoso: `panel` es capa de arriba, no una dependencia de ycloud.
+        from app.panel import supervisor_log
+
+        etiquetas = _ETIQUETAS_PLANTILLA.get(plantilla, ())
+        texto = "\n".join(
+            f"{etiquetas[i]}: {p}" if i < len(etiquetas) else str(p)
+            for i, p in enumerate(parametros or [])
+        )
+        await supervisor_log.registrar(
+            "aviso" if plantilla != settings.template_alerta_supervisor else "escalamiento",
+            emisor=emisor,
+            plantilla=plantilla,
+            texto=texto,
+            enviado=enviado,
+            cliente=str(parametros[0]) if parametros else "",
+            # El panel enlaza a la conversación con esto. En las dos plantillas de
+            # arriba el teléfono del cliente es la variable 2; si mañana hay otra con
+            # otro orden, queda vacío y el aviso igual se ve (sólo sin el enlace).
+            chat_id=(
+                str(parametros[1]).lstrip("+")
+                if len(parametros or []) > 1 and etiquetas[1:2] == ("Número",)
+                else ""
+            ),
+            detalle="" if enviado else (
+                "YCloud/Meta rechazó el envío: el supervisor NO se enteró. Revisá que la "
+                "plantilla esté aprobada y que el nombre coincida (ver PLANTILLA_META.md)."
+            ),
+        )
+    except Exception:  # noqa: BLE001
+        pass
+
+
 class YCloud:
     def __init__(self) -> None:
         self._client: httpx.AsyncClient | None = None
@@ -224,30 +277,40 @@ class YCloud:
     async def enviar_plantilla(
         self, telefono: str, emisor: str, nombre: str, parametros: list[str]
     ) -> None:
-        await self._post(
-            {
-                "from": emisor,
-                "to": telefono,
-                "type": "template",
-                "template": {
-                    "name": nombre,
-                    "language": {"code": settings.template_lang},
-                    "components": [
-                        {
-                            "type": "body",
-                            "parameters": [
-                                {
-                                    "type": "text",
-                                    "text": re.sub(r"[\r\n\t]", " ", str(p)).strip()[:200]
-                                    or "-",
-                                }
-                                for p in parametros
-                            ],
-                        }
-                    ],
-                },
-            }
-        )
+        enviado = True
+        try:
+            await self._post(
+                {
+                    "from": emisor,
+                    "to": telefono,
+                    "type": "template",
+                    "template": {
+                        "name": nombre,
+                        "language": {"code": settings.template_lang},
+                        "components": [
+                            {
+                                "type": "body",
+                                "parameters": [
+                                    {
+                                        "type": "text",
+                                        "text": re.sub(r"[\r\n\t]", " ", str(p)).strip()[:200]
+                                        or "-",
+                                    }
+                                    for p in parametros
+                                ],
+                            }
+                        ],
+                    },
+                }
+            )
+        except Exception:
+            enviado = False
+            raise
+        finally:
+            # Acá y no en cada llamada: así TODA plantilla al supervisor queda en el
+            # módulo "Al supervisor" del panel, incluidas las que se agreguen después.
+            # Es el único lugar donde se puede ver qué se le mandó y si llegó.
+            await _registrar_si_es_al_supervisor(telefono, emisor, nombre, parametros, enviado)
 
     async def enviar_plantilla_botones(
         self,

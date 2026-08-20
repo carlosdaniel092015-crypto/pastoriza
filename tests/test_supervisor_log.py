@@ -76,6 +76,103 @@ class TestRegistro:
         assert ms[0]["texto"] == f"n{supervisor_log.MAX + 24}"  # el más nuevo primero
 
 
+class TestLasPlantillasQuedanRegistradas:
+    """`enviar_plantilla` registra sola cuando el destino es el supervisor.
+
+    Va en ycloud y no en cada llamada porque hay TRES lugares que le mandan plantillas
+    al supervisor (escalamiento, pedido creado, fallback del aviso de aprobación) y el
+    de escalamiento se había quedado afuera: los avisos de "Asistencia Humana
+    Requerida" no aparecían en el panel.
+    """
+
+    @pytest.mark.asyncio
+    async def test_el_escalamiento_queda_con_sus_etiquetas(self, fake, monkeypatch):
+        from app.panel import supervisor_log
+        from app.settings import settings
+        from app.ycloud import ycloud
+
+        async def _ok(*a, **kw):
+            return {"id": "1"}
+
+        monkeypatch.setattr(ycloud, "_post", _ok)
+        await ycloud.enviar_plantilla(
+            settings.admin_phone, "18099221092", "alerta_supervisor_cliente",
+            ["Colmado o4", "+18096882021", "(nota de voz) necesito hablar con alguien"],
+        )
+        ms = await supervisor_log.listar()
+        assert len(ms) == 1
+        assert ms[0]["tipo"] == "escalamiento"
+        assert ms[0]["enviado"] is True
+        assert ms[0]["cliente"] == "Colmado o4"
+        # Con etiquetas: si no, en el panel se ven tres valores sueltos.
+        assert "Cliente: Colmado o4" in ms[0]["texto"]
+        assert "Lo que pidió: (nota de voz) necesito hablar con alguien" in ms[0]["texto"]
+        # Y enlaza a la conversación del cliente.
+        assert ms[0]["chat_id"] == "18096882021"
+
+    @pytest.mark.asyncio
+    async def test_si_meta_la_rechaza_queda_marcada_como_no_entregada(self, fake, monkeypatch):
+        """Es el caso que más importa: la plantilla no aprobada no avisa a nadie, y sin
+        registro el síntoma es que no pasa nada y no hay dónde mirar."""
+        from app.panel import supervisor_log
+        from app.settings import settings
+        from app.ycloud import ycloud
+
+        async def _falla(*a, **kw):
+            raise RuntimeError("template not approved")
+
+        monkeypatch.setattr(ycloud, "_post", _falla)
+        with pytest.raises(RuntimeError):
+            await ycloud.enviar_plantilla(
+                settings.admin_phone, "18099221092", "alerta_supervisor_cliente",
+                ["Winifer", "+18294255310", "Ok yo soy de Santiago"],
+            )
+        ms = await supervisor_log.listar()
+        assert len(ms) == 1
+        assert ms[0]["enviado"] is False
+        assert "PLANTILLA_META" in ms[0]["detalle"]
+        assert await supervisor_log.sin_entregar() == 1
+
+    @pytest.mark.asyncio
+    async def test_una_plantilla_a_un_cliente_no_se_registra(self, fake, monkeypatch):
+        """El módulo es lo que se le manda al SUPERVISOR: si entraran las de clientes,
+        se volvería otro feed de conversaciones y no serviría para nada."""
+        from app.panel import supervisor_log
+        from app.ycloud import ycloud
+
+        async def _ok(*a, **kw):
+            return {"id": "1"}
+
+        monkeypatch.setattr(ycloud, "_post", _ok)
+        await ycloud.enviar_plantilla(
+            "+18091112222", "18099221092", "alerta_supervisor_cliente", ["x", "y", "z"]
+        )
+        assert await supervisor_log.listar() == []
+
+    @pytest.mark.asyncio
+    async def test_un_fallo_del_registro_no_impide_el_aviso(self, fake, monkeypatch):
+        from app.panel import supervisor_log
+        from app.settings import settings
+        from app.ycloud import ycloud
+
+        enviados = []
+
+        async def _ok(payload, *a, **kw):
+            enviados.append(payload)
+            return {"id": "1"}
+
+        async def _explota(*a, **kw):
+            raise RuntimeError("redis caido")
+
+        monkeypatch.setattr(ycloud, "_post", _ok)
+        monkeypatch.setattr(supervisor_log, "registrar", _explota)
+        # No debe levantar: el aviso al supervisor vale más que su registro.
+        await ycloud.enviar_plantilla(
+            settings.admin_phone, "18099221092", "alerta_supervisor_cliente", ["a", "b", "c"]
+        )
+        assert len(enviados) == 1
+
+
 class TestResumenLegible:
     def test_etiqueta_las_variables_de_la_plantilla(self):
         from app import aprobacion
