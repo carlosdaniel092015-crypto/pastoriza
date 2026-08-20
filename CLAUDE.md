@@ -115,7 +115,10 @@ conversaciones con CLIENTES, así que lo que el bot le manda al `ADMIN_PHONE` (l
 aprobación con los botones, los avisos de escalamiento) no se veía en ninguna parte — y si Meta
 rechaza la plantilla, el síntoma es justamente que NO llega nada y no hay dónde mirar. Se anota
 en una lista capada (`pastoriza:panel:supervisor`, 400 entradas, TTL 30 días) desde
-`pagos.avisar_supervisor` y `ycloud.avisar_admin`, con `enviado: bool`; el contador del header
+`pagos.avisar_supervisor`, `ycloud.avisar_admin` y **`ycloud.enviar_plantilla`** (ahí y no en
+cada llamada: hay tres lugares que le mandan plantillas al supervisor y el de escalamiento se
+había quedado afuera, así que los avisos de "Asistencia Humana Requerida" no se veían en ninguna
+parte), con `enviado: bool`; el contador del header
 ("al supervisor") y el badge del módulo muestran los que NO se entregaron, porque un aviso que no
 llegó es un pedido esperando aprobación que el supervisor no sabe que existe. La plantilla vive
 en Meta (el bot sólo manda las 9 variables), así que `aprobacion.resumen_legible` las etiqueta

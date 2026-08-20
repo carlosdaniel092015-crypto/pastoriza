@@ -897,7 +897,8 @@ async function calcularSemaforo(rehacer){
 // El panel muestra conversaciones con CLIENTES, así que la plantilla de aprobación que
 // el bot le manda al supervisor no aparecía en ninguna parte: si Meta la rechazaba, el
 // síntoma era que no llegaba nada y no había dónde mirar.
-const TIPO_SUP={aprobacion:'Plantilla de aprobación',aviso:'Aviso',comprobante:'Comprobante',rechazo_motivo:'Motivo de rechazo'};
+const TIPO_SUP={aprobacion:'Pedido por aprobar',escalamiento:'Asistencia humana requerida',
+  aviso:'Aviso',comprobante:'Comprobante',rechazo_motivo:'Motivo de rechazo'};
 function verSupervisor(){ const b=document.querySelector('nav.side .it[data-v="supervisor"]'); if(b) b.click(); }
 async function loadSupervisor(){
   const msg=$('#supmsg'), body=$('#supbody');
