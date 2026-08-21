@@ -6,7 +6,11 @@ CRUZA la medianoche.
 """
 from __future__ import annotations
 
+import os
+import time as time_mod
 from datetime import datetime
+
+import pytest
 
 from app.horario import dentro_de_horario
 
@@ -66,3 +70,33 @@ class TestConfigRota:
     def test_usa_ahora_real_si_no_se_pasa(self):
         # No debe levantar al usar datetime.now() internamente.
         assert isinstance(dentro_de_horario("", ""), bool)
+
+
+@pytest.mark.skipif(not hasattr(time_mod, "tzset"), reason="tzset es POSIX, no Windows")
+class TestUsaHoraDeRepublicaDominicanaSinImportarElServidor:
+    """El 829-471-6701 no se puede activar antes de tiempo por un servidor con otra
+    zona horaria (TZ del sistema/contenedor, una migración, un redeploy que pierda la
+    variable): la hora se calcula EXPLÍCITA en código (America/Santo_Domingo, sin
+    horario de verano), no según cómo esté configurado el reloj del proceso."""
+
+    def test_ignora_la_variable_tz_del_proceso(self, monkeypatch):
+        original = os.environ.get("TZ")
+        try:
+            os.environ["TZ"] = "UTC"
+            time_mod.tzset()
+            # Si el código usara datetime.now() sin zona (hora del SISTEMA), este
+            # resultado dependería de que el proceso esté en UTC. Con la zona RD
+            # explícita, da la MISMA respuesta que si el sistema estuviera bien puesto.
+            con_tz_utc = dentro_de_horario("19:00", "05:00")
+
+            os.environ["TZ"] = "America/Santo_Domingo"
+            time_mod.tzset()
+            con_tz_rd = dentro_de_horario("19:00", "05:00")
+
+            assert con_tz_utc == con_tz_rd
+        finally:
+            if original is None:
+                os.environ.pop("TZ", None)
+            else:
+                os.environ["TZ"] = original
+            time_mod.tzset()

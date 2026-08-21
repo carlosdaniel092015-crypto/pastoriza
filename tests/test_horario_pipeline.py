@@ -75,7 +75,7 @@ class TestElCanalConfiguradoRespetaElHorario:
         await _configurar_horario(CANAL_NOCTURNO, "19:00", "05:00")
         monkeypatch.setattr(
             horario_mod, "datetime",
-            type("D", (), {"now": staticmethod(lambda: datetime(2026, 1, 15, 12, 0))}),
+            type("D", (), {"now": staticmethod(lambda tz=None: datetime(2026, 1, 15, 12, 0))}),
         )
 
         from app.pipeline import manejar_entrante
@@ -92,7 +92,7 @@ class TestElCanalConfiguradoRespetaElHorario:
         await _configurar_horario(CANAL_NOCTURNO, "19:00", "05:00")
         monkeypatch.setattr(
             horario_mod, "datetime",
-            type("D", (), {"now": staticmethod(lambda: datetime(2026, 1, 15, 22, 0))}),
+            type("D", (), {"now": staticmethod(lambda tz=None: datetime(2026, 1, 15, 22, 0))}),
         )
 
         from app.pipeline import manejar_entrante
@@ -112,7 +112,7 @@ class TestElCanalConfiguradoRespetaElHorario:
         await _configurar_horario(CANAL_NOCTURNO, "19:00", "05:00")
         monkeypatch.setattr(
             horario_mod, "datetime",
-            type("D", (), {"now": staticmethod(lambda: datetime(2026, 1, 15, 12, 0))}),
+            type("D", (), {"now": staticmethod(lambda tz=None: datetime(2026, 1, 15, 12, 0))}),
         )
 
         from app.pipeline import manejar_entrante
@@ -134,7 +134,7 @@ class TestElCanalConfiguradoRespetaElHorario:
         await _configurar_horario(CANAL_NOCTURNO, "19:00", "05:00")
         monkeypatch.setattr(
             horario_mod, "datetime",
-            type("D", (), {"now": staticmethod(lambda: datetime(2026, 1, 15, 12, 0))}),
+            type("D", (), {"now": staticmethod(lambda tz=None: datetime(2026, 1, 15, 12, 0))}),
         )
 
         from app.pipeline import manejar_entrante

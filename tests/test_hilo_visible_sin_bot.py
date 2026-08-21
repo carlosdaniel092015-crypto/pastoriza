@@ -108,7 +108,7 @@ class TestFueraDeHorario:
         )
         monkeypatch.setattr(
             horario_mod, "datetime",
-            type("D", (), {"now": staticmethod(lambda: datetime(2026, 1, 15, 12, 0))}),
+            type("D", (), {"now": staticmethod(lambda tz=None: datetime(2026, 1, 15, 12, 0))}),
         )
 
         from app.pipeline import manejar_entrante
@@ -139,7 +139,7 @@ class TestFueraDeHorario:
         )
         monkeypatch.setattr(
             horario_mod, "datetime",
-            type("D", (), {"now": staticmethod(lambda: datetime(2026, 1, 15, 12, 0))}),
+            type("D", (), {"now": staticmethod(lambda tz=None: datetime(2026, 1, 15, 12, 0))}),
         )
 
         from app.pipeline import manejar_entrante
