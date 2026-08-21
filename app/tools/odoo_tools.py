@@ -20,6 +20,7 @@ from app.estado import (
     guardar_pedido_abierto,
     leer_comprobante,
     leer_cotizacion,
+    leer_cotizacion_subtotal,
     leer_pedido_abierto,
 )
 from app.logging_conf import get_logger
@@ -381,6 +382,21 @@ async def crear_pedido_impl(
     if abierto:
         return await _adoptar_pedido_abierto(
             c, abierto, texto_comprobante, url_comprobante
+        )
+
+    # REGLA DURA: no se crea un pedido por debajo del mínimo. Va acá y no sólo en el
+    # prompt porque el modelo ya llegó a cotizar por debajo del mínimo y ofrecer seguir
+    # con el pago igual (caso real: cotizó 19 unidades, RD$271.64 de subtotal, y pasó
+    # directo a "cómo deseas pagar" sin decir que el mínimo son RD$1000). El subtotal
+    # puede venir de ESTE turno o de uno anterior (mismo criterio que el comprobante).
+    minimo = c.cfg.monto_minimo_num
+    subtotal = c.cotizado_subtotal or await leer_cotizacion_subtotal(c.chat_id)
+    if minimo > 0 and subtotal and subtotal < minimo:
+        return (
+            f"ERROR: el pedido minimo es RD${minimo:,.2f} de subtotal (sin ITBIS ni "
+            f"envio) y lo cotizado solo llega a RD${subtotal:,.2f}. NO se creó el "
+            "pedido. Dile al cliente el mínimo con amabilidad y ofrécele sumar más "
+            "unidades o productos hasta alcanzarlo."
         )
 
     m = modalidad.lower()

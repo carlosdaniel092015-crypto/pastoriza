@@ -170,6 +170,13 @@ class BusinessConfig:
         except ValueError:
             return 550.0
 
+    @property
+    def monto_minimo_num(self) -> float:
+        try:
+            return float(str(self.monto_minimo).replace(",", ""))
+        except (TypeError, ValueError):
+            return 1000.0
+
 
 def derivar_pago(cfg: BusinessConfig) -> str:
     """Lo que se le contesta a quien pregunta dónde pagar. NUNCA lleva cuentas.

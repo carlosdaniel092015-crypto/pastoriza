@@ -170,6 +170,45 @@ async def leer_cotizacion(chat_id: str) -> float:
         return 0.0
 
 
+# Mismo motivo que `guardar_cotizacion`/`leer_cotizacion` (el comprobante llega en un
+# turno posterior), pero para el SUBTOTAL: el pedido mínimo se mide sin ITBIS ni envío,
+# así que no alcanza con el total ya guardado (`crear_pedido` lo usa para bloquear un
+# pedido por debajo del mínimo).
+async def guardar_cotizacion_subtotal(chat_id: str, subtotal: float) -> None:
+    """Guarda el subtotal cotizado más ALTO del chat (mismo criterio que el total)."""
+    if not chat_id or not subtotal or subtotal <= 0:
+        return
+    previo = await leer_cotizacion_subtotal(chat_id)
+    if subtotal <= previo:
+        return
+    await _escritura_idempotente(
+        lambda r: r.set(
+            settings.key("cotizado_subtotal", chat_id),
+            f"{float(subtotal):.2f}",
+            ex=settings.session_ttl_seconds,
+        ),
+        "guardar_cotizacion_subtotal",
+        chat_id=chat_id,
+    )
+
+
+async def leer_cotizacion_subtotal(chat_id: str) -> float:
+    """Subtotal cotizado del chat. 0.0 si no hay o si Redis falla (no bloquear por eso:
+    ver `leer_cotizacion`)."""
+    if not chat_id:
+        return 0.0
+    try:
+        raw = await with_reconnect(
+            lambda r: r.get(settings.key("cotizado_subtotal", chat_id))
+        )
+    except Exception:  # noqa: BLE001
+        return 0.0
+    try:
+        return float(raw) if raw else 0.0
+    except (TypeError, ValueError):
+        return 0.0
+
+
 # El comprobante también tiene que sobrevivir al turno. Caso real: el cliente manda la
 # foto ANTES de dar la dirección; el pedido no se puede crear todavía, y en el turno
 # siguiente —cuando por fin da la dirección— el comprobante ya no está en el contexto.
