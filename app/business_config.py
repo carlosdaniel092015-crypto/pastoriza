@@ -155,6 +155,14 @@ class BusinessConfig:
     fardo_cantidad: str = ""  # unidades por fardo
     fardo_envio_minimo: str = ""  # envío mínimo por fardo
 
+    # Horario en el que el bot responde SOLO en este canal (app/horario.py). "HH:MM"
+    # 24h. Vacío en cualquiera de los dos = sin restricción (default, no afecta a un
+    # canal que nunca configuró esto). Cruza la medianoche si desde > hasta (ej: 19:00
+    # a 05:00). Fuera de la ventana el mensaje sigue viéndose en el panel para
+    # atenderlo a mano, igual que con el bot pausado.
+    horario_activo_desde: str = ""
+    horario_activo_hasta: str = ""
+
     @property
     def precio_envio_num(self) -> float:
         try:
