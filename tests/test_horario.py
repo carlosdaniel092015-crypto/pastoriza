@@ -72,6 +72,45 @@ class TestConfigRota:
         assert isinstance(dentro_de_horario("", ""), bool)
 
 
+class TestSinBaseDeZonasHorarias:
+    """Si falta `tzdata` (Windows sin el paquete, un venv no actualizado) el bot
+    entero no se puede caer al arrancar: mejor perder precisión de zona que perder
+    el proceso completo (ver el comentario de ZONA_RD en app/horario.py)."""
+
+    def test_import_no_explota_si_zoneinfo_falla(self):
+        import importlib
+        import zoneinfo
+
+        import app.horario as horario_mod
+
+        class _ZoneInfoRota:
+            def __init__(self, *a, **kw):
+                raise Exception("No time zone found (simulado)")
+
+        # Se parcha en el módulo `zoneinfo`, no en `horario_mod`: `reload` vuelve a
+        # ejecutar `from zoneinfo import ZoneInfo`, así que el parche tiene que estar
+        # en el origen para sobrevivir esa reimportación. Manual (no `monkeypatch`)
+        # porque el `undo` de `monkeypatch` corre DESPUÉS de este `finally`, y el
+        # reload de limpieza necesita el ZoneInfo real ya restaurado o deja el módulo
+        # roto para el resto de la suite (`reload` muta el módulo en `sys.modules`).
+        original = zoneinfo.ZoneInfo
+        zoneinfo.ZoneInfo = _ZoneInfoRota
+        try:
+            importlib.reload(horario_mod)
+            assert horario_mod.ZONA_RD is None
+            assert isinstance(horario_mod.dentro_de_horario("19:00", "05:00"), bool)
+        finally:
+            zoneinfo.ZoneInfo = original
+            importlib.reload(horario_mod)  # deja el módulo real para el resto de tests
+
+    def test_zona_en_none_cae_a_la_hora_del_sistema(self, monkeypatch):
+        import app.horario as horario_mod
+
+        monkeypatch.setattr(horario_mod, "ZONA_RD", None)
+        # datetime.now(None) es exactamente datetime.now(): no debe levantar.
+        assert isinstance(dentro_de_horario("19:00", "05:00"), bool)
+
+
 @pytest.mark.skipif(not hasattr(time_mod, "tzset"), reason="tzset es POSIX, no Windows")
 class TestUsaHoraDeRepublicaDominicanaSinImportarElServidor:
     """El 829-471-6701 no se puede activar antes de tiempo por un servidor con otra

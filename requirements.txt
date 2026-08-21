@@ -14,6 +14,10 @@ openai>=1.60.0
 redis>=5.2.0
 httpx>=0.27.0
 structlog>=24.4.0
+# Windows no trae base de datos IANA de zonas horarias: zoneinfo (app/horario.py)
+# la necesita para "America/Santo_Domingo", si no ZoneInfo(...) explota al importar.
+# En Linux/Docker no estorba (ya está la del sistema, apt tzdata en el Dockerfile).
+tzdata>=2024.1
 # Recepción de archivos en el panel (respuesta con imagen/cámara). FastAPI lo
 # necesita para UploadFile/Form.
 python-multipart>=0.0.9
