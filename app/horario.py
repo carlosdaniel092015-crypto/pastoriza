@@ -10,10 +10,18 @@ mensaje queda visible en el panel para que alguien lo atienda a mano.
 from __future__ import annotations
 
 from datetime import datetime, time
+from zoneinfo import ZoneInfo
 
 from app.logging_conf import get_logger
 
 log = get_logger(__name__)
+
+# Hora de REPÚBLICA DOMINICANA, explícita en código y no en la config del servidor:
+# `datetime.now()` (sin tz) depende de cómo esté configurado el sistema/contenedor
+# donde corre el bot, y un despliegue, migración o variable de entorno (TZ) que lo
+# cambie silenciosamente activaría/apagaría el 829-471-6701 a la hora equivocada sin
+# que nadie lo note. República Dominicana no usa horario de verano (siempre UTC-4).
+ZONA_RD = ZoneInfo("America/Santo_Domingo")
 
 
 def _parsear(hhmm: str) -> time | None:
@@ -38,7 +46,7 @@ def dentro_de_horario(desde: str, hasta: str, ahora: datetime | None = None) -> 
     t_hasta = _parsear(hasta)
     if t_desde is None or t_hasta is None:
         return True
-    hora = (ahora or datetime.now()).time()
+    hora = (ahora or datetime.now(ZONA_RD)).time()
     if t_desde <= t_hasta:
         return t_desde <= hora < t_hasta
     # Cruza la medianoche (ej: 19:00 a 05:00): activo en la tarde-noche O la madrugada.
