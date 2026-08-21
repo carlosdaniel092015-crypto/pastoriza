@@ -17,7 +17,8 @@ from agents import MaxTurnsExceeded, Runner
 
 from app.agents import RespuestaBot, analizar_contexto
 from app.agents import obtener as obtener_especialista
-from app.business_config import get_producto_de_anuncio, load_config
+from app.business_config import canales_configurados, get_producto_de_anuncio, load_config
+from app.canales import canal_id
 from app.catalogo import catalogo
 from app.context import ConversationContext
 from app.debounce import acumular, drenar, es_duplicado, esperar_turno
@@ -97,11 +98,38 @@ def _limpiar_markdown(mensaje: str) -> str:
     return RE_ENCABEZADO_MD.sub("", mensaje)  # "### Título" -> "Título"
 
 
+async def _es_uno_de_nuestros_numeros(numero: str) -> bool:
+    """True si `numero` es 1092, 6701, o el ADMIN_PHONE (aunque fuera un tercero):
+    ninguno de nuestros propios números es un cliente al que venderle."""
+    n = canal_id(numero)
+    if not n:
+        return False
+    if n == canal_id(settings.admin_phone):
+        return True
+    try:
+        nuestros = {canal_id(c) for c in await canales_configurados()}
+    except Exception as exc:  # noqa: BLE001
+        # Fail-open: si esto falla, mejor atender un mensaje raro que dejar a un
+        # cliente real sin respuesta por un problema leyendo la config.
+        log.warning("es_uno_de_nuestros_numeros_fallo", error=str(exc))
+        return False
+    return n in nuestros
+
+
 # --------------------------------------------------------------- entrada ---
 async def manejar_entrante(msg: InboundMessage) -> None:
     """Se llama desde el webhook. No bloquea: acumula y programa el turno."""
     if settings.allowlist and msg.chat_id not in settings.allowlist:
         log.info("fuera_de_allowlist", chat_id=msg.chat_id)
+        return
+
+    # Ninguno de nuestros DOS NÚMEROS es un cliente: si un mensaje "entrante" trae de
+    # remitente (chat_id) a 1092 o a 6701 -mismo cruzados entre sí, o uno escribiéndose
+    # a sí mismo-, no es una venta, es tráfico interno (o un bug de otro lado mandando
+    # al número equivocado). No se registra en el panel como conversación ni se le
+    # contesta a nadie: el 6701 en particular lo maneja una PERSONA, nunca el bot.
+    if await _es_uno_de_nuestros_numeros(msg.chat_id):
+        log.info("mensaje_entre_nuestros_numeros_ignorado", chat_id=msg.chat_id)
         return
 
     # Dedup: si YCloud reintenta el webhook o entrega el mismo mensaje dos veces,
