@@ -147,10 +147,12 @@ async def manejar_entrante(msg: InboundMessage) -> None:
 
     if await bot_global_apagado():
         log.info("bot_global_off_ignorando", chat_id=msg.chat_id)
+        await _registrar_en_sesion(msg.chat_id, _texto_visible(msg))
         return
 
     if await bot_pausado(msg.chat_id):
         log.info("bot_pausado_ignorando", chat_id=msg.chat_id)
+        await _registrar_en_sesion(msg.chat_id, _texto_visible(msg))
         return
 
     emisor = settings.ycloud_from or msg.instance_from
@@ -160,6 +162,7 @@ async def manejar_entrante(msg: InboundMessage) -> None:
             "fuera_de_horario_ignorando", chat_id=msg.chat_id, emisor=emisor,
             desde=cfg.horario_activo_desde, hasta=cfg.horario_activo_hasta,
         )
+        await _registrar_en_sesion(msg.chat_id, _texto_visible(msg))
         return
 
     await acumular(msg)
@@ -179,11 +182,40 @@ _ETIQUETA_MEDIA = {
 }
 
 
+def _texto_visible(msg: InboundMessage) -> str:
+    """Lo que se ve en la lista y en el hilo cuando el mensaje aún no pasó por el
+    agente (audio sin transcribir, foto sin analizar): un placeholder, no el archivo."""
+    return (msg.content or "").strip() or _ETIQUETA_MEDIA.get(msg.content_type, "(mensaje)")
+
+
+async def _registrar_en_sesion(chat_id: str, texto_cliente: str = "", texto_bot: str = "") -> None:
+    """Deja un registro en la MEMORIA visible del panel (RedisSession) cuando el
+    flujo normal no llega a escribir nada ahí: bot pausado/apagado, fuera de horario,
+    o el turno se cayó con un error.
+
+    Sin esto, el hilo del panel se ve VACÍO aunque `chatmeta` (la vista previa de la
+    lista) sí muestre que el cliente escribió: son dos registros separados, y sólo uno
+    se actualiza en estos casos. Nunca puede tumbar el turno: es sólo para que quien
+    opera pueda leer qué dijo el cliente.
+    """
+    if not chat_id:
+        return
+    items = []
+    if texto_cliente:
+        items.append({"role": "user", "content": texto_cliente})
+    if texto_bot:
+        items.append({"role": "assistant", "content": texto_bot})
+    if not items:
+        return
+    try:
+        await RedisSession(chat_id).add_items(items)
+    except Exception as exc:  # noqa: BLE001
+        log.warning("registrar_en_sesion_fallo", chat_id=chat_id, error=str(exc))
+
+
 async def _registrar_entrante(msg: InboundMessage) -> None:
     """Deja la conversación visible en el panel al instante (no espera al bot)."""
-    texto = (msg.content or "").strip() or _ETIQUETA_MEDIA.get(
-        msg.content_type, "(mensaje)"
-    )
+    texto = _texto_visible(msg)
     try:
         await panel_events.tocar_chatmeta(
             msg.chat_id,
@@ -296,17 +328,22 @@ async def _turno_diferido(msg: InboundMessage) -> None:
         await _fallback_error(msg)
 
 
-async def _fallback_error(msg: InboundMessage) -> None:
-    """Si todo falla, el cliente no se queda hablando solo."""
+async def _fallback_error(msg: InboundMessage, texto: str = "") -> None:
+    """Si todo falla, el cliente no se queda hablando solo.
+
+    `texto` es lo que el cliente dijo de verdad (el combinado de `_combinar`, si ya se
+    llegó a armar); sin pasarlo se usa `msg.content` crudo. El turno se cayó ANTES de
+    que el agente pudiera dejar registro en la sesión, así que sin `_registrar_en_sesion`
+    el hilo del panel quedaría vacío aunque el cliente sí escribió y el bot sí (intentó)
+    responder.
+    """
+    aviso = (
+        "Disculpa, tuve un inconveniente tecnico. Un companero del equipo te "
+        "escribe enseguida."
+    )
     try:
         emisor = settings.ycloud_from or msg.instance_from
-        await ycloud.enviar_texto(
-            msg.destino_ycloud(),
-            emisor,
-            "Disculpa, tuve un inconveniente tecnico. Un companero del equipo te "
-            "escribe enseguida.",
-            simular_tipeo=False,
-        )
+        await ycloud.enviar_texto(msg.destino_ycloud(), emisor, aviso, simular_tipeo=False)
         await ycloud.avisar_admin(
             emisor,
             f"ERROR tecnico atendiendo a {msg.user_name or 'cliente'} "
@@ -314,6 +351,7 @@ async def _fallback_error(msg: InboundMessage) -> None:
         )
     except Exception:  # noqa: BLE001
         log.exception("fallback_error_fallo", chat_id=msg.chat_id)
+    await _registrar_en_sesion(msg.chat_id, texto or _texto_visible(msg), aviso)
 
 
 async def _bajar_para_el_panel(url: str) -> bytes:
@@ -587,7 +625,7 @@ async def procesar_turno(
     # ------- agente -------
     respuesta = await _correr_agente(texto, ctx)
     if respuesta is None:
-        await _fallback_error(trigger)
+        await _fallback_error(trigger, texto)
         return
 
     mensaje = _sanear(respuesta.mensaje, ctx)
