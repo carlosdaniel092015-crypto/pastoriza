@@ -31,6 +31,7 @@ from app.estado import (
     registrar_msg_bot,
     tocar_ventana_24h,
 )
+from app.horario import dentro_de_horario
 from app.logging_conf import get_logger
 from app.media import (
     analizar_bytes,
@@ -122,6 +123,15 @@ async def manejar_entrante(msg: InboundMessage) -> None:
 
     if await bot_pausado(msg.chat_id):
         log.info("bot_pausado_ignorando", chat_id=msg.chat_id)
+        return
+
+    emisor = settings.ycloud_from or msg.instance_from
+    cfg = await load_config(emisor)
+    if not dentro_de_horario(cfg.horario_activo_desde, cfg.horario_activo_hasta):
+        log.info(
+            "fuera_de_horario_ignorando", chat_id=msg.chat_id, emisor=emisor,
+            desde=cfg.horario_activo_desde, hasta=cfg.horario_activo_hasta,
+        )
         return
 
     await acumular(msg)

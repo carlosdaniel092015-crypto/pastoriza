@@ -59,6 +59,16 @@ panel (override en Redis). Ver `app/agents/base.py:armar_instrucciones`.
 Config de **negocio** editable en Redis (`app/business_config.py`) ≠ config de **entorno**
 (`app/settings.py`).
 
+**Horario del bot por canal (`app/horario.py`):** un número puede responder SOLO en una
+ventana horaria (ej: 6701 sólo de 19:00 a 05:00) — el resto del tiempo el mensaje se ve en
+el panel pero el bot no contesta, para que alguien lo atienda a mano fuera de esa ventana
+(mismo tratamiento que `bot_pausado`). `horario_activo_desde`/`horario_activo_hasta`
+("HH:MM" 24h) son config de negocio POR CANAL; vacío en cualquiera de los dos = sin
+restricción (default). La ventana puede cruzar la medianoche (19:00 a 05:00). Config rota o
+sin llenar falla ABIERTO (bot siempre activo): un typo no puede dejarlo mudo todo el día sin
+que nadie sepa por qué. Se corta en `manejar_entrante`, ANTES del debounce, con el `emisor`
+del mensaje (no del chat: dos números pueden escribirle al mismo `chat_id`).
+
 **DOS CANALES (`app/canales.py`, ADR-011):** el bot atiende dos números de YCloud (uno
 coexistente con la app de WhatsApp) y **cada uno es individual**. Canal = número NUESTRO por el
 que entró el mensaje (`ctx.emisor`), normalizado a sus últimos 10 dígitos. Todo lo configurable
