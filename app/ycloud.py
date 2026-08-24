@@ -276,10 +276,20 @@ class YCloud:
     # --------------------------------------------------------- plantilla ---
     async def enviar_plantilla(
         self, telefono: str, emisor: str, nombre: str, parametros: list[str]
-    ) -> None:
-        enviado = True
+    ) -> bool:
+        """Plantilla simple (sin botones ni cabecera).
+
+        Devuelve True sólo si YCloud aceptó el envío -mismo criterio que
+        `enviar_plantilla_botones`-: en producción `_post` NO lanza por un rechazo de
+        Meta o un timeout, sólo devuelve None (ver su propio try/except), así que el
+        resultado real sale de lo que devolvió, no de si hubo una excepción. Quien
+        llama necesita el bool para no dar por avisado a alguien que no lo fue (ver
+        `pipeline._atender_telefono_pendiente`, que antes asumía —mal— que "no lanzó"
+        significaba "se mandó").
+        """
+        enviado = False
         try:
-            await self._post(
+            data = await self._post(
                 {
                     "from": emisor,
                     "to": telefono,
@@ -303,6 +313,7 @@ class YCloud:
                     },
                 }
             )
+            enviado = bool(data)
         except Exception:
             enviado = False
             raise
@@ -311,6 +322,7 @@ class YCloud:
             # módulo "Al supervisor" del panel, incluidas las que se agreguen después.
             # Es el único lugar donde se puede ver qué se le mandó y si llegó.
             await _registrar_si_es_al_supervisor(telefono, emisor, nombre, parametros, enviado)
+        return enviado
 
     async def enviar_plantilla_botones(
         self,
@@ -367,10 +379,12 @@ class YCloud:
         })
         return bool(data)
 
-    async def avisar_admin(self, emisor: str, texto: str) -> None:
-        enviado = True
+    async def avisar_admin(self, emisor: str, texto: str) -> bool:
+        """Mismo criterio que `enviar_plantilla`: True sólo si `_post` de verdad
+        devolvió algo (en producción no lanza por un rechazo o timeout, sólo None)."""
+        enviado = False
         try:
-            await self._post(
+            data = await self._post(
                 {
                     "from": emisor,
                     "to": settings.admin_phone,
@@ -378,6 +392,7 @@ class YCloud:
                     "text": {"body": texto[:4000]},
                 }
             )
+            enviado = bool(data)
         except Exception:
             enviado = False
             raise
@@ -392,6 +407,7 @@ class YCloud:
                 )
             except Exception:  # noqa: BLE001
                 pass
+        return enviado
 
 
 ycloud = YCloud()

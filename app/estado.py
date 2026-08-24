@@ -361,6 +361,93 @@ async def limpiar_motivo() -> None:
     )
 
 
+# Chat que pidió asistencia y/o mandó un comprobante sin pedido, sin que tengamos su
+# teléfono real (típico de un chat que llega de Instagram/un anuncio: el chat_id es un
+# ID interno, no un número). A diferencia de `motivo_pendiente` (UN solo pendiente
+# global, porque sólo el supervisor responde eso), acá puede haber varios CHATS
+# esperando a la vez -uno por cliente- y un MISMO chat puede tener más de un tipo
+# pendiente (pidió asistencia Y por separado mandó un comprobante sin pedido, antes de
+# dar su teléfono): por eso el valor es {tipo: {resumen, ts}}, no un solo registro. Si
+# fuera un solo registro, el segundo pedido pisaría al primero y ese aviso se perdería
+# para siempre (justo lo que este mecanismo existe para evitar).
+TTL_TELEFONO_PENDIENTE = 24 * 3600  # una vez pedido, no tiene sentido esperarlo para siempre
+
+
+async def pedir_telefono(chat_id: str, tipo: str, resumen: str) -> None:
+    """`tipo`: "asistencia" o "pedido" (comprobante sin pedido). `resumen`: lo que el
+    cliente necesita, para avisarle al supervisor en cuanto llegue el teléfono.
+
+    Se AGREGA al resto de lo pendiente de este chat, no lo reemplaza: si ya había otro
+    tipo esperando, sigue esperando.
+    """
+    if not chat_id:
+        return
+    pendientes = await telefono_pendiente(chat_id)
+    pendientes[tipo] = {"resumen": resumen, "ts": time.time()}
+    await _escritura_idempotente(
+        lambda r: r.set(
+            settings.key("telefono_pendiente", chat_id),
+            json.dumps(pendientes),
+            ex=TTL_TELEFONO_PENDIENTE,
+        ),
+        "pedir_telefono",
+        chat_id=chat_id,
+    )
+
+
+async def telefono_pendiente(chat_id: str) -> dict:
+    """{tipo: {'resumen','ts'}, ...} de lo que este chat tiene pendiente, o {}."""
+    if not chat_id:
+        return {}
+    try:
+        raw = await with_reconnect(
+            lambda r: r.get(settings.key("telefono_pendiente", chat_id))
+        )
+    except Exception:  # noqa: BLE001
+        return {}
+    if not raw:
+        return {}
+    try:
+        data = json.loads(raw)
+    except json.JSONDecodeError:
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+async def limpiar_telefono_pendiente(chat_id: str, tipo: str = "") -> None:
+    """Sin `tipo`, borra TODO lo pendiente del chat. Con `tipo`, sólo ese tipo — deja
+    el resto (ej: se avisó el handoff, pero el comprobante sin pedido sigue esperando)."""
+    if not chat_id:
+        return
+    if not tipo:
+        await _escritura_idempotente(
+            lambda r: r.delete(settings.key("telefono_pendiente", chat_id)),
+            "limpiar_telefono_pendiente",
+            chat_id=chat_id,
+        )
+        return
+    pendientes = await telefono_pendiente(chat_id)
+    if tipo not in pendientes:
+        return
+    del pendientes[tipo]
+    if pendientes:
+        await _escritura_idempotente(
+            lambda r: r.set(
+                settings.key("telefono_pendiente", chat_id),
+                json.dumps(pendientes),
+                ex=TTL_TELEFONO_PENDIENTE,
+            ),
+            "limpiar_telefono_pendiente",
+            chat_id=chat_id,
+        )
+    else:
+        await _escritura_idempotente(
+            lambda r: r.delete(settings.key("telefono_pendiente", chat_id)),
+            "limpiar_telefono_pendiente",
+            chat_id=chat_id,
+        )
+
+
 async def tocar_ventana_24h(chat_id: str) -> None:
     await _escritura_idempotente(
         lambda r: r.set(

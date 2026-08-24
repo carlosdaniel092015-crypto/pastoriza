@@ -134,6 +134,32 @@ class TestLasPlantillasQuedanRegistradas:
         assert await supervisor_log.sin_entregar() == 1
 
     @pytest.mark.asyncio
+    async def test_un_rechazo_real_de_meta_no_lanza_pero_igual_marca_no_entregada(
+        self, fake, monkeypatch
+    ):
+        """El caso REAL (no el simulado de arriba): `_post` no lanza por un 4xx/5xx de
+        Meta o YCloud, sólo devuelve None (ver su propio try/except en app/ycloud.py).
+        `enviar_plantilla` tiene que leer eso, no asumir que "no lanzó" es "se mandó" —
+        ese fue justo el bug: el aviso de handoff le decía al cliente "ya avisé al
+        supervisor" con un rechazo silencioso de por medio."""
+        from app.panel import supervisor_log
+        from app.settings import settings
+        from app.ycloud import ycloud
+
+        async def _rechazo_silencioso(*a, **kw):
+            return None  # como el _post real ante un 4xx: no lanza, devuelve None
+
+        monkeypatch.setattr(ycloud, "_post", _rechazo_silencioso)
+        enviado = await ycloud.enviar_plantilla(
+            settings.admin_phone, "18099221092", "alerta_supervisor_cliente",
+            ["Génesis Akemy", "+18293837395", "necesita ayuda con su pedido"],
+        )
+
+        assert enviado is False
+        ms = await supervisor_log.listar()
+        assert ms[0]["enviado"] is False
+
+    @pytest.mark.asyncio
     async def test_una_plantilla_a_un_cliente_no_se_registra(self, fake, monkeypatch):
         """El módulo es lo que se le manda al SUPERVISOR: si entraran las de clientes,
         se volvería otro feed de conversaciones y no serviría para nada."""

@@ -41,6 +41,13 @@ class ConversationContext:
     # el modelo: `crear_pedido` saca de acá el monto transferido para comprobar que
     # cubra el total cotizado (ver app/comprobante.py).
     comprobante_texto: str = ""
+    # Tipos ("asistencia", "pedido") cuyo "¿me compartes tu número?" pendiente
+    # respondió ESTE mensaje, y cuyo aviso diferido ya se mandó en este mismo turno
+    # (ver pipeline._atender_telefono_pendiente; un chat puede tener los dos tipos
+    # pendientes a la vez). Evita que una escalada NUEVA en el mismo mensaje ("aquí
+    # está mi número, y quiero hablar con alguien") mande un segundo aviso duplicado
+    # de "asistencia" al supervisor.
+    tipos_telefono_avisados: frozenset[str] = frozenset()
 
     # --- enrutado multi-agente (qué especialista atendió este turno) ---
     agente: str = ""

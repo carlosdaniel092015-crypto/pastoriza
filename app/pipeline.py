@@ -28,8 +28,11 @@ from app.estado import (
     encolar_revision,
     es_msg_bot,
     guardar_comprobante,
+    limpiar_telefono_pendiente,
     pausar_bot,
+    pedir_telefono,
     registrar_msg_bot,
+    telefono_pendiente,
     tocar_ventana_24h,
 )
 from app.horario import dentro_de_horario
@@ -207,6 +210,139 @@ async def _telefono_persistido(chat_id: str) -> str:
         log.warning("telefono_persistido_fallo", chat_id=chat_id, error=str(exc))
         return ""
     return str((meta or {}).get("telefono") or "")
+
+
+# Sólo códigos de área de República Dominicana (809/829/849): así no confunde una
+# cantidad o cualquier otra seguidilla de dígitos con un teléfono. Los IDs de pedido de
+# este negocio son enteros chicos (ej. "171", "S00163"), nunca de 10 dígitos, así que
+# el riesgo de leer OTRO número de 10 dígitos como si fuera el teléfono es bajo — pero
+# no cero: es un best-effort, igual que el resto de esta rama (ver el docstring).
+RE_TELEFONO_LIBRE = re.compile(r"(?:\+?1[\s.\-]?)?\(?(809|829|849)\)?[\s.\-]?\d{3}[\s.\-]?\d{4}")
+
+
+def _extraer_telefono_libre(texto: str) -> str:
+    """Un teléfono de RD dentro de texto libre: "mi numero es 8293837395", "puedes
+    llamarme al 829-383-7395". "" si no hay ninguno reconocible."""
+    m = RE_TELEFONO_LIBRE.search(texto or "")
+    return canal_id(m.group(0)) if m else ""
+
+
+async def _avisar_telefono_pendiente(
+    chat_id: str, tipo: str, resumen: str, numero: str, emisor: str, user_name: str
+) -> bool:
+    """Manda el aviso diferido de UN tipo pendiente. True si se pudo avisar (plantilla
+    o su respaldo en texto plano); no borra nada — eso lo decide quien llama."""
+    enviado = False
+    try:
+        if tipo == "asistencia":
+            enviado = await ycloud.enviar_plantilla(
+                settings.admin_phone,
+                emisor,
+                settings.template_alerta_supervisor,
+                [user_name or "Sin nombre", numero, resumen],
+            )
+        else:  # "pedido": mismo texto que la ALERTA original de comprobante sin pedido
+            enviado = await ycloud.avisar_admin(
+                emisor,
+                "ALERTA: llego un comprobante pero el pedido NO se registro solo. "
+                f"Cliente: {user_name or 'Sin nombre'} | Tel: {numero} | {resumen}",
+            )
+    except Exception as exc:  # noqa: BLE001
+        log.warning("telefono_pendiente_aviso_fallo", chat_id=chat_id, tipo=tipo, error=str(exc))
+    if not enviado and tipo == "asistencia":
+        try:
+            # Mismo respaldo que `pagos.avisar_supervisor`: si Meta no tiene la
+            # plantilla aprobada, un aviso de texto plano es mejor que ninguno. "pedido"
+            # nunca tuvo plantilla que reintentar: si su único envío falla, no hay a
+            # qué caer.
+            enviado = await ycloud.avisar_admin(
+                emisor,
+                "Asistencia humana requerida. Cliente: "
+                f"{user_name or 'Sin nombre'} | Tel: {numero} | Lo que pidio: "
+                f"{resumen or '-'}",
+            )
+        except Exception as exc2:  # noqa: BLE001
+            log.warning("telefono_pendiente_respaldo_fallo", chat_id=chat_id, error=str(exc2))
+    if not enviado:
+        log.error("telefono_pendiente_sin_avisar", chat_id=chat_id, tipo=tipo)
+    return enviado
+
+
+async def _atender_telefono_pendiente(
+    chat_id: str, texto: str, emisor: str, destino: dict, user_name: str = ""
+) -> tuple[str, frozenset[str]]:
+    """Si este chat quedó esperando un teléfono (ver `pedir_telefono`: handoff y/o
+    comprobante sin número real -un chat puede tener LOS DOS a la vez-) y este mensaje
+    trae uno, completa TODOS los avisos que quedaron pendientes.
+
+    Devuelve `(numero, tipos_avisados)`. `numero` es "" si no hay nada pendiente o el
+    mensaje no trae un teléfono reconocible — ahí el turno sigue su curso normal y se
+    puede reconocer en el próximo mensaje. `tipos_avisados` son los tipos que SÍ se
+    alcanzaron a avisar en este turno (puede ser más de uno): quien llama lo necesita
+    para no repetir el de "asistencia" si el mismo mensaje también dispara una
+    escalada nueva (ver `_efectos`).
+
+    El tipo cuyo aviso no se pudo mandar (ni la plantilla ni el respaldo en texto
+    plano) NO se borra, para poder reintentarlo; los demás sí. Nunca bloquea el turno:
+    como mucho, se pierde (por ahora) alguno de los avisos diferidos, no la respuesta
+    al cliente.
+    """
+    try:
+        pendientes = await telefono_pendiente(chat_id)
+    except Exception as exc:  # noqa: BLE001
+        log.warning("telefono_pendiente_fallo", chat_id=chat_id, error=str(exc))
+        return "", frozenset()
+    if not pendientes:
+        return "", frozenset()
+    numero = _extraer_telefono_libre(texto)
+    if not numero:
+        return "", frozenset()
+
+    avisados: set[str] = set()
+    for tipo, datos in pendientes.items():
+        if tipo not in ("asistencia", "pedido"):
+            continue  # tipo desconocido: no tocarlo, no perderlo
+        resumen = str((datos or {}).get("resumen") or "")
+        if await _avisar_telefono_pendiente(chat_id, tipo, resumen, numero, emisor, user_name):
+            await limpiar_telefono_pendiente(chat_id, tipo)
+            avisados.add(tipo)
+    if not avisados:
+        # NINGÚN aviso salió: no se devuelve el número. Si se devolviera, quedaría
+        # como `ctx.telefono` de este turno y de ahí pasaría al chatmeta persistido
+        # (ver `_telefono_persistido`) — el PRÓXIMO mensaje ya vería un teléfono
+        # "conocido" y nunca volvería a llamar a esta función, dejando el pendiente
+        # huérfano en Redis hasta que venza su TTL, sin que nadie lo reintente nunca.
+        return "", frozenset()
+    # El "gracias" al cliente NO se manda acá: esta función corre ANTES que el SDK
+    # escriba en RedisSession el mensaje del cliente (Runner.run, más adelante en el
+    # turno). Si se mandara y registrara ya, quedaría un turno de assistant ANTES que
+    # el mensaje del cliente que lo disparó — el hilo del panel y la memoria del
+    # agente leerían la conversación al revés. Lo manda `procesar_turno`, después de
+    # correr el agente (ver TEXTO_GRACIAS_TELEFONO_PENDIENTE).
+    return numero, frozenset(avisados)
+
+
+TEXTO_GRACIAS_TELEFONO_PENDIENTE = (
+    "Gracias. Ya avise al supervisor con tu numero; te contactara en breve."
+)
+
+
+async def _confirmar_telefono_pendiente(
+    chat_id: str, destino: dict, emisor: str, tipos_avisados: frozenset[str]
+) -> None:
+    """Manda y registra el "gracias" cuando `_atender_telefono_pendiente` avisó algo
+    EN ESTE TURNO. Llamar DESPUÉS de que el mensaje del cliente ya quedó escrito en la
+    sesión (el fast-path lo escribe él mismo; el agente, vía el Runner del SDK) — si no,
+    el hilo queda con la respuesta ANTES que el mensaje que la disparó."""
+    if not tipos_avisados:
+        return
+    try:
+        await ycloud.enviar_texto(
+            destino, emisor, TEXTO_GRACIAS_TELEFONO_PENDIENTE, simular_tipeo=False,
+        )
+        await _registrar_en_sesion(chat_id, texto_bot=TEXTO_GRACIAS_TELEFONO_PENDIENTE)
+    except Exception as exc:  # noqa: BLE001
+        log.warning("telefono_pendiente_gracias_fallo", chat_id=chat_id, error=str(exc))
 
 
 async def _registrar_en_sesion(chat_id: str, texto_cliente: str = "", texto_bot: str = "") -> None:
@@ -535,12 +671,23 @@ async def procesar_turno(
     ad_id = str(referral.get("source_id", "") or "")
     ad_producto = await get_producto_de_anuncio(ad_id) if ad_id else None
 
+    user_name = next((m.user_name for m in msgs if m.user_name), "")
     telefono = trigger.telefono or await _telefono_persistido(chat_id)
+    tipos_telefono_avisados: frozenset[str] = frozenset()
+    if not telefono:
+        # Puede ser la respuesta a "¿me compartes tu número?" (ver _efectos: handoff o
+        # comprobante sin teléfono real): si lo trae, completa el/los aviso(s)
+        # diferido(s) y lo usa de una vez como el teléfono de este turno. Si no hay
+        # nada pendiente o el mensaje no trae un número, no hace nada y el turno sigue
+        # normal.
+        telefono, tipos_telefono_avisados = await _atender_telefono_pendiente(
+            chat_id, texto, emisor, destino, user_name
+        )
 
     ctx = ConversationContext(
         chat_id=chat_id,
         telefono=telefono,
-        user_name=next((m.user_name for m in msgs if m.user_name), ""),
+        user_name=user_name,
         emisor=emisor,
         destino=destino,
         cfg=cfg,
@@ -553,6 +700,7 @@ async def procesar_turno(
         # Lo que la visión leyó del comprobante (banco, monto, referencia): de ahí
         # sale el monto que `crear_pedido` compara contra lo cotizado.
         comprobante_texto=desc_imagen if es_comprobante else "",
+        tipos_telefono_avisados=tipos_telefono_avisados,
     )
     if es_comprobante:
         # Se guarda para que sobreviva al turno: el cliente suele mandar la foto ANTES
@@ -625,6 +773,10 @@ async def procesar_turno(
                 {"role": "assistant", "content": directa},
             ]
         )
+        # Si este mensaje también respondía "¿me compartes tu número?", el aviso al
+        # supervisor ya salió más arriba (_atender_telefono_pendiente); acá sólo falta
+        # confirmárselo al cliente, DESPUÉS de que su mensaje ya quedó en el historial.
+        await _confirmar_telefono_pendiente(chat_id, destino, emisor, tipos_telefono_avisados)
         # El fast-path también mueve el semáforo: quien pregunta por las cuentas de
         # banco lo hace muchas veces por acá (0 tokens), y es la señal más fuerte.
         puntos = await _puntuar(chat_id, texto, ctx)
@@ -663,6 +815,11 @@ async def procesar_turno(
         await ycloud.enviar_imagenes(destino, emisor, items)
     elif mensaje:
         await ycloud.enviar_texto(destino, emisor, mensaje)
+
+    # Recién ACÁ, después de que el SDK ya escribió en RedisSession el mensaje del
+    # cliente y la respuesta del agente (ver _atender_telefono_pendiente, más arriba,
+    # sobre por qué no se manda/registra antes).
+    await _confirmar_telefono_pendiente(chat_id, destino, emisor, tipos_telefono_avisados)
 
     await tocar_ventana_24h(chat_id)
     await _efectos(ctx, respuesta, mensaje, trigger, _texto_del_cliente(texto, trigger))
@@ -981,6 +1138,24 @@ def _texto_del_cliente(texto: str, trigger: InboundMessage) -> str:
     return limpio if limpio != "-" else "(el cliente pidió hablar con una persona)"
 
 
+async def _pedir_telefono_al_cliente(
+    ctx: ConversationContext, texto: str, ya_pedido: bool
+) -> bool:
+    """Manda "¿me compartes tu número?" UNA sola vez por turno: `_efectos` puede pedir
+    el teléfono por dos motivos en el mismo turno (comprobante sin pedido Y handoff), y
+    aunque los dos llaman a `pedir_telefono` (el pendiente en Redis queda para los dos
+    tipos), el cliente no necesita ver la misma pregunta repetida. Devuelve el nuevo
+    valor de `ya_pedido` para la próxima llamada."""
+    if ya_pedido:
+        return True
+    await ycloud.enviar_texto(ctx.destino, ctx.emisor, texto, simular_tipeo=False)
+    # Mensaje de WhatsApp SEPARADO del que ya escribió el agente (fuera del `mensaje`
+    # que graba el Runner del SDK): sin esto, el hilo del panel no coincide con lo que
+    # el cliente recibió de verdad.
+    await _registrar_en_sesion(ctx.chat_id, texto_bot=texto)
+    return True
+
+
 async def _efectos(
     ctx: ConversationContext,
     respuesta: RespuestaBot,
@@ -988,6 +1163,11 @@ async def _efectos(
     trigger: InboundMessage,
     texto_cliente: str = "",
 ) -> None:
+    # Un mismo turno puede pedir el teléfono por DOS motivos a la vez (comprobante sin
+    # pedido Y handoff): sólo el primer "¿me compartes tu número?" sale como mensaje —
+    # el segundo `pedir_telefono` igual queda registrado, pero no repite la pregunta.
+    ya_pidio_telefono_este_turno = False
+
     # 1. Pedido creado -> avisar al admin y adjuntar el comprobante en Odoo.
     if ctx.order_id:
         await panel_events.publicar(
@@ -1013,12 +1193,28 @@ async def _efectos(
     # 2. Comprobante que NO terminó en pedido: eso siempre necesita ojos.
     elif ctx.es_comprobante:
         ctx.marcar_revision("comprobante_sin_pedido")
-        await ycloud.avisar_admin(
-            ctx.emisor,
-            "ALERTA: llego un comprobante pero el pedido NO se registro solo. "
-            f"Cliente: {ctx.user_name or 'Sin nombre'} | Tel: "
-            f"{ctx.telefono or ctx.chat_id} | Comprobante: {ctx.imagen_url or '-'}",
-        )
+        if ctx.telefono:
+            await ycloud.avisar_admin(
+                ctx.emisor,
+                "ALERTA: llego un comprobante pero el pedido NO se registro solo. "
+                f"Cliente: {ctx.user_name or 'Sin nombre'} | Tel: {ctx.telefono} | "
+                f"Comprobante: {ctx.imagen_url or '-'}",
+            )
+        else:
+            # Sin teléfono real (chat de Instagram/anuncio): igual que en el handoff,
+            # mandarle al supervisor el chat_id de YCloud no sirve de nada. Puede pasar
+            # más seguido desde que crear_pedido exige un teléfono real (ver
+            # odoo_tools.py): un comprobante sin pedido y sin teléfono es justo el caso
+            # que ese candado deja pendiente.
+            await pedir_telefono(
+                ctx.chat_id, "pedido",
+                f"Mando un comprobante pero el pedido no se registro. Comprobante: "
+                f"{ctx.imagen_url or '-'}",
+            )
+            ya_pidio_telefono_este_turno = await _pedir_telefono_al_cliente(
+                ctx, "Para poder procesar tu pago, ¿me compartes tu numero de telefono?",
+                ya_pidio_telefono_este_turno,
+            )
 
     # 3. Handoff a humano. El modelo también puede pedirlo por su salida
     # (respuesta.escalar), saltándose la tool: ese camino pasa por el MISMO candado
@@ -1033,24 +1229,42 @@ async def _efectos(
         respuesta.escalar = False
     if ctx.escalar or respuesta.escalar:
         ctx.marcar_revision("handoff")
-        await ycloud.enviar_plantilla(
-            settings.admin_phone,
-            ctx.emisor,
-            settings.template_alerta_supervisor,
-            [
-                ctx.user_name or "Sin nombre",
-                ctx.telefono or ctx.chat_id,
-                # Lo que dijo el CLIENTE, no lo que contestó el bot.
-                texto_cliente or _texto_del_cliente("", trigger),
-            ],
-        )
-        await ycloud.enviar_texto(
-            ctx.destino,
-            ctx.emisor,
-            "Un supervisor se comunicara contigo en breve. Ya fue notificado. "
-            "Gracias por tu paciencia.",
-            simular_tipeo=False,
-        )
+        resumen_cliente = texto_cliente or _texto_del_cliente("", trigger)
+        if "asistencia" in ctx.tipos_telefono_avisados:
+            # Este mismo mensaje YA disparó el aviso de "asistencia" diferido (ver
+            # _atender_telefono_pendiente): "aquí está mi número, y quiero hablar con
+            # alguien" pide una escalada NUEVA en el mismo turno que responde la
+            # pregunta del número. El supervisor ya se enteró; mandar todo de nuevo
+            # sería un aviso duplicado y una segunda confirmación al cliente. (Si lo
+            # que se avisó fue el otro tipo, "pedido", esta escalada SÍ es nueva y
+            # tiene que salir: por eso se compara el tipo, no sólo si hubo algún aviso.)
+            pass
+        elif ctx.telefono:
+            await ycloud.enviar_plantilla(
+                settings.admin_phone,
+                ctx.emisor,
+                settings.template_alerta_supervisor,
+                [ctx.user_name or "Sin nombre", ctx.telefono, resumen_cliente],
+            )
+            await ycloud.enviar_texto(
+                ctx.destino,
+                ctx.emisor,
+                "Un supervisor se comunicara contigo en breve. Ya fue notificado. "
+                "Gracias por tu paciencia.",
+                simular_tipeo=False,
+            )
+        else:
+            # Sin teléfono real (chat de Instagram/anuncio): mandarle al supervisor el
+            # chat_id de YCloud no le sirve para nada. Se le pide al cliente y el aviso
+            # sale recién cuando lo dé (ver _atender_telefono_pendiente, que atiende la
+            # respuesta en un turno posterior).
+            await pedir_telefono(ctx.chat_id, "asistencia", resumen_cliente)
+            ya_pidio_telefono_este_turno = await _pedir_telefono_al_cliente(
+                ctx,
+                "Para que un supervisor pueda contactarte, ¿me compartes tu numero "
+                "de telefono?",
+                ya_pidio_telefono_este_turno,
+            )
 
     # 4. Cola de revisión por excepción.
     await encolar_revision(

@@ -428,6 +428,22 @@ async def crear_pedido_impl(
             c, abierto, texto_comprobante, url_comprobante
         )
 
+    # REGLA DURA: no se crea un pedido sin un teléfono real del cliente. Caso real: un
+    # chat que llega de Instagram/un anuncio (chat_id es un ID interno de YCloud, no un
+    # número) terminó con un pedido cuyo único "teléfono" era ese ID — inútil para el
+    # supervisor o el mensajero. `c.telefono` a esta altura ya incluye lo que haya dado
+    # el cliente por chat (crear_contacto/actualizar_contacto de ESTE turno, ver
+    # odoo_tools.py) o lo que quedó guardado de una vez anterior (ver
+    # pipeline._telefono_persistido), así que si sigue vacío es porque de verdad no hay
+    # ninguno todavía.
+    if not c.telefono:
+        return (
+            "ERROR: no tenemos un teléfono real de este cliente (llegó sin número de "
+            "WhatsApp). NO se creó el pedido. Pídele su número de teléfono con "
+            'amabilidad (ej: "¿me confirmas tu número para coordinar la entrega?") y '
+            "pásaselo a crear_contacto o actualizar_contacto antes de reintentar."
+        )
+
     # REGLA DURA: no se crea un pedido por debajo del mínimo. Va acá y no sólo en el
     # prompt porque el modelo ya llegó a cotizar por debajo del mínimo y ofrecer seguir
     # con el pago igual (caso real: cotizó 19 unidades, RD$271.64 de subtotal, y pasó

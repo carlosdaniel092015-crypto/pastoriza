@@ -97,6 +97,87 @@ async def test_handoff_envia_plantilla_y_mensaje(monkeypatch):
     yc.enviar_texto.assert_awaited()
 
 
+async def test_handoff_sin_telefono_le_pide_el_numero_en_vez_de_avisar(monkeypatch):
+    """Caso real: chat de Instagram/anuncio, chat_id es un ID interno de YCloud (no un
+    número). Mandarle ese ID al supervisor como "teléfono" no le sirve a nadie —hay
+    que pedírselo al cliente y avisar recién cuando lo dé (ver test_telefono_pendiente.py)."""
+    yc, _pe, _enc = _mockear(monkeypatch)
+    pedir = AsyncMock()
+    monkeypatch.setattr(pipeline, "pedir_telefono", pedir)
+    ctx = ctx_nuevo(telefono=None, chat_id="DO.3712360618920826")
+    ctx.permite_escalar = True
+    trigger = InboundMessage(
+        chat_id="DO.3712360618920826", content="necesito ayuda con mi pedido",
+    )
+
+    await pipeline._efectos(
+        ctx, RespuestaBot(mensaje="ok", escalar=True), "ok", trigger
+    )
+
+    yc.enviar_plantilla.assert_not_awaited()  # NO se manda con el chat_id
+    pedir.assert_awaited_once()
+    assert pedir.await_args.args[0] == "DO.3712360618920826"
+    assert pedir.await_args.args[1] == "asistencia"
+    texto_pedido = yc.enviar_texto.await_args.args[2]
+    assert "numero" in texto_pedido.lower() or "número" in texto_pedido.lower()
+
+
+async def test_handoff_no_duplica_el_aviso_si_ya_se_avisó_este_turno(monkeypatch):
+    """Caso: el mensaje que responde "¿me compartes tu número?" TAMBIÉN pide hablar
+    con alguien ("aquí está mi número, y quiero hablar con un supervisor"). El aviso
+    diferido ya salió en _atender_telefono_pendiente (mismo turno): mandar la
+    plantilla de nuevo acá sería un aviso duplicado y una segunda confirmación."""
+    yc, _pe, _enc = _mockear(monkeypatch)
+    ctx = ctx_nuevo(telefono="8293837395", tipos_telefono_avisados=frozenset({"asistencia"}))
+    ctx.permite_escalar = True
+    trigger = InboundMessage(content="aqui esta mi numero, y quiero hablar con alguien")
+
+    await pipeline._efectos(
+        ctx, RespuestaBot(mensaje="ok", escalar=True), "ok", trigger
+    )
+
+    assert "handoff" in ctx.motivo_revision  # sigue quedando registrado
+    yc.enviar_plantilla.assert_not_awaited()
+    yc.enviar_texto.assert_not_awaited()
+
+
+async def test_handoff_SI_avisa_si_lo_resuelto_este_turno_fue_el_otro_tipo(monkeypatch):
+    """Si lo que se avisó este turno fue "pedido" (comprobante sin pedido), una
+    escalada NUEVA en el mismo mensaje es una cosa distinta y sí tiene que salir."""
+    yc, _pe, _enc = _mockear(monkeypatch)
+    ctx = ctx_nuevo(telefono="8293837395", tipos_telefono_avisados=frozenset({"pedido"}))
+    ctx.permite_escalar = True
+    trigger = InboundMessage(content="ahi esta mi numero, aparte quiero hablar con alguien")
+
+    await pipeline._efectos(
+        ctx, RespuestaBot(mensaje="ok", escalar=True), "ok", trigger
+    )
+
+    yc.enviar_plantilla.assert_awaited()
+    yc.enviar_texto.assert_awaited()
+
+
+async def test_comprobante_sin_pedido_y_sin_telefono_pide_el_numero(monkeypatch):
+    """Mismo mecanismo que el handoff, para el comprobante sin pedido: más probable
+    ahora que crear_pedido exige un teléfono real (ver odoo_tools.py)."""
+    yc, _pe, _enc = _mockear(monkeypatch)
+    pedir = AsyncMock()
+    monkeypatch.setattr(pipeline, "pedir_telefono", pedir)
+    ctx = ctx_nuevo(telefono=None, chat_id="DO.111", es_comprobante=True,
+                    imagen_url="http://x/comprobante.jpg")
+    trigger = InboundMessage(chat_id="DO.111", content="[foto de comprobante]")
+
+    await pipeline._efectos(ctx, RespuestaBot(mensaje="ok"), "ok", trigger)
+
+    assert "comprobante_sin_pedido" in ctx.motivo_revision
+    yc.avisar_admin.assert_not_awaited()  # NO se manda con el chat_id
+    pedir.assert_awaited_once()
+    assert pedir.await_args.args[0] == "DO.111"
+    assert pedir.await_args.args[1] == "pedido"
+    texto_pedido = yc.enviar_texto.await_args.args[2]
+    assert "numero" in texto_pedido.lower() or "número" in texto_pedido.lower()
+
+
 async def test_handoff_bloqueado_si_el_determinador_no_lo_habilita(monkeypatch):
     """El modelo puede pedir escalada por su salida (sin usar la tool): ese camino
     pasa por el mismo candado. Caso real: llegó a escalar un SALUDO al supervisor."""
