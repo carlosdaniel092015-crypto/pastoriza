@@ -60,6 +60,14 @@ RE_DIRECCION = _R(r"(donde (estan|estamos|queda|quedan|esta|es la tienda|es el n
 RE_HORARIO = _R(r"\b(horario|a que hora (abren|cierran)|hasta que hora|"
                 r"que hora (abren|cierran)|estan abiertos|dias que abren)\b")
 RE_TELEFONO = _R(r"\b(telefono|numero de contacto|como los llamo|numero de telefono)\b")
+# Distinto de RE_TELEFONO: no es "el teléfono de la tienda", es específicamente el
+# número de un REPRESENTANTE/asesor humano. Va con el número fijo del supervisor
+# (829-471-6701, ver ADR-011/013), no con cfg.telefono. "representante legal" (RNC,
+# facturación) es un término de negocio distinto y NO cuenta: (?!\s+legal) lo excluye.
+RE_REPRESENTANTE = _R(
+    r"\b(numero|telefono|contacto)[^\n,.;]{0,15}(representante(?!\s+legal)|asesor)\b|"
+    r"\b(representante(?!\s+legal)|asesor)[^\n,.;]{0,15}(numero|telefono|contacto)\b"
+)
 RE_CUENTAS = _R(r"\b(cuenta bancaria|numero de cuenta|numero de cuentas|a que cuenta|"
                 r"a cual cuenta|donde (deposito|transfiero|pago)|a que banco|"
                 r"a cual banco|datos de pago|para (transferir|pagar))\b")
@@ -114,7 +122,21 @@ def _grupos_faq(norm: str) -> set[str]:
     # tienda (aunque "donde esta" también matchee la regex de dirección).
     if RE_ESTADO_PEDIDO.search(norm):
         return {"estado"}
-    if RE_DIRECCION.search(norm) or RE_HORARIO.search(norm) or RE_TELEFONO.search(norm):
+    m_representante = RE_REPRESENTANTE.search(norm)
+    if m_representante:
+        g.add("representante")
+    # "telefono del representante" también matchea la RE_TELEFONO genérica (trae la
+    # palabra suelta "telefono" DENTRO del mismo tramo que ya cubrió "representante"):
+    # es UNA sola intención, no dos. Se saca ESE tramo antes de mirar RE_TELEFONO, para
+    # no perder un "telefono" genuino en otra parte del mensaje (ej. "el telefono de
+    # la tienda y el numero de un asesor" sí son dos pedidos y tienen que ir al
+    # agente, igual que "el representante y el horario").
+    norm_sin_representante = RE_REPRESENTANTE.sub(" ", norm) if m_representante else norm
+    if (
+        RE_DIRECCION.search(norm)
+        or RE_HORARIO.search(norm)
+        or RE_TELEFONO.search(norm_sin_representante)
+    ):
         g.add("tienda")
     if RE_ENVIO_RETIRO.match(norm) or RE_ENVIO.search(norm):
         g.add("envio")
@@ -214,6 +236,14 @@ def respuesta_directa(
 
     if RE_HORARIO.search(norm):
         return f"Nuestro horario es {cfg.horario_tienda}. Estamos en {cfg.direccion}."
+
+    if RE_REPRESENTANTE.search(norm):
+        # Antes que RE_TELEFONO a propósito: "numero de un representante" también
+        # matchea "numero de telefono", pero acá se pide algo distinto (un humano, no
+        # el teléfono general de la tienda). Mismo número que `derivar_pago`
+        # (cfg.pago_whatsapp, no uno hardcodeado aparte): es el mismo supervisor, y
+        # si el número cambia algún día, no puede quedar una copia vieja acá.
+        return f"Puedes comunicarte directamente con nuestro representante al {cfg.pago_whatsapp}."
 
     if RE_TELEFONO.search(norm):
         return f"Nuestro telefono es {cfg.telefono}. Tambien puedes escribirnos por aqui."
