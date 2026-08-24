@@ -46,6 +46,39 @@ class TestRespondeSolo:
         out = r("cual es el telefono")
         assert out and CFG.telefono in out
 
+    @pytest.mark.parametrize("texto", [
+        "cual es el numero del representante",
+        "me pasas el telefono de un representante",
+        "numero de contacto del asesor",
+        "telefono del asesor",
+    ])
+    def test_numero_del_representante(self, texto):
+        """No es cfg.telefono (el de la tienda): es cfg.pago_whatsapp, el mismo número
+        que ya usa derivar_pago (no uno hardcodeado aparte)."""
+        out = r(texto)
+        assert out and CFG.pago_whatsapp in out
+        assert CFG.telefono not in out
+
+    @pytest.mark.parametrize("texto", [
+        "necesito el numero, ya llame al asesor",
+        "me pasas el numero de la tienda porque el asesor no contesta",
+    ])
+    def test_numero_y_asesor_en_clausulas_distintas_no_es_el_representante(self, texto):
+        """"numero" y "asesor" en la misma oración pero sin relación entre sí -no es
+        un pedido del número del representante-: no debe responder con ese número."""
+        out = r(texto)
+        assert out is None or CFG.pago_whatsapp not in out
+
+    @pytest.mark.parametrize("texto", [
+        "necesito el telefono y rnc de su representante legal para la factura",
+        "cual es el numero del representante legal de la empresa",
+    ])
+    def test_representante_legal_no_es_el_asesor_de_ventas(self, texto):
+        """"representante legal" (RNC, facturación) es un término de negocio
+        distinto: no debe responder con el número del supervisor."""
+        out = r(texto)
+        assert out is None or CFG.pago_whatsapp not in out
+
     def test_estado_pedido_deriva(self):
         out = r("donde esta mi pedido")
         assert out and "829" in out
@@ -118,3 +151,14 @@ class TestMultiIntencion:
         # seguir respondiendo el estado del pedido, no irse al agente.
         out = r("donde esta mi pedido")
         assert out and "829" in out
+
+    def test_representante_mas_horario_va_al_agente(self):
+        assert r("numero del representante y el horario de ustedes") is None
+
+    def test_representante_mas_telefono_de_la_tienda_va_al_agente(self):
+        """Dos pedidos DISTINTOS aunque ambos toquen la palabra "telefono": el de la
+        tienda (RE_TELEFONO) y el del representante, en tramos separados del mensaje.
+        No es el mismo solapamiento que "telefono del representante" (una sola cosa)."""
+        assert r(
+            "necesito el telefono de la tienda y tambien el numero de un asesor"
+        ) is None
