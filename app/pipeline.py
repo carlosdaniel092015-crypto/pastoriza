@@ -188,6 +188,27 @@ def _texto_visible(msg: InboundMessage) -> str:
     return (msg.content or "").strip() or _ETIQUETA_MEDIA.get(msg.content_type, "(mensaje)")
 
 
+async def _telefono_persistido(chat_id: str) -> str:
+    """El teléfono real de este chat, si se capturó en un turno ANTERIOR.
+
+    Caso real: un chat que llega de un anuncio tiene un chat_id interno de YCloud
+    (`DO.xxxxxxx...`), no un número. Si el cliente ya dio su teléfono antes (lo
+    guardó `crear_contacto`/`actualizar_contacto` en `ConversationContext.telefono`,
+    y de ahí pasó al chatmeta al final de ESE turno), un turno POSTERIOR sin ninguna
+    tool de contacto de por medio (ej: pide asistencia humana) arrancaría con
+    `ctx.telefono` vacío otra vez y los avisos al supervisor caerían al chat_id, que
+    no es un teléfono. Sin bloquear nada si Redis falla: es sólo para mostrar mejor.
+    """
+    if not chat_id:
+        return ""
+    try:
+        meta = await panel_events.leer_chatmeta(chat_id)
+    except Exception as exc:  # noqa: BLE001
+        log.warning("telefono_persistido_fallo", chat_id=chat_id, error=str(exc))
+        return ""
+    return str((meta or {}).get("telefono") or "")
+
+
 async def _registrar_en_sesion(chat_id: str, texto_cliente: str = "", texto_bot: str = "") -> None:
     """Deja un registro en la MEMORIA visible del panel (RedisSession) cuando el
     flujo normal no llega a escribir nada ahí: bot pausado/apagado, fuera de horario,
@@ -514,9 +535,11 @@ async def procesar_turno(
     ad_id = str(referral.get("source_id", "") or "")
     ad_producto = await get_producto_de_anuncio(ad_id) if ad_id else None
 
+    telefono = trigger.telefono or await _telefono_persistido(chat_id)
+
     ctx = ConversationContext(
         chat_id=chat_id,
-        telefono=trigger.telefono,
+        telefono=telefono,
         user_name=next((m.user_name for m in msgs if m.user_name), ""),
         emisor=emisor,
         destino=destino,
