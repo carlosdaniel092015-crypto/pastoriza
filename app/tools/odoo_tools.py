@@ -147,6 +147,92 @@ async def verificar_contacto(ctx: RunContextWrapper[ConversationContext]) -> str
     )
 
 
+async def crear_contacto_impl(
+    c: ConversationContext,
+    nombre: str,
+    calle: str = "",
+    referencia: str = "",
+    ciudad: str = "",
+    telefono: str = "",
+    email: str = "",
+) -> str:
+    """La lógica de `crear_contacto`, sin el envoltorio del SDK.
+
+    Separada para poder testear directo que el teléfono que da el cliente queda en
+    `ConversationContext` (ver el comentario más abajo, junto a `c.telefono =`).
+    """
+    # CANDADO: el contacto queda en Odoo para siempre; no se crea con el alias de
+    # WhatsApp ni con emojis. Si no se lo preguntaste al cliente, pregúntaselo.
+    motivo = nombre_no_valido(nombre, c.user_name)
+    if motivo:
+        log.warning(
+            "contacto_nombre_rechazado",
+            chat_id=c.chat_id, nombre=nombre[:40], motivo=motivo,
+        )
+        c.marcar_revision("nombre_invalido")
+        return (
+            f"ERROR: {motivo}. PREGÚNTALE al cliente su nombre completo (ej: "
+            '"¿A nombre de quién registro el pedido?") y vuelve a intentarlo con '
+            "lo que te responda. NO uses el nombre de WhatsApp."
+        )
+    telefono_final = c.telefono or telefono.strip()
+    valores = {
+        "name": nombre.strip(),
+        "street": calle.strip(),
+        "street2": referencia.strip(),
+        "city": ciudad.strip(),
+        "zip": "",
+        "country_id": settings.odoo_country_id,
+        "phone": telefono_final,
+        "email": email.strip(),
+    }
+    valores = {k: v for k, v in valores.items() if v not in ("", None)}
+    partner_id = await odoo.create("res.partner", valores)
+    c.partner_id = partner_id
+    # Cuando YCloud no trae el teléfono (chat_id es un ID interno, no un número: pasa
+    # con los chats que llegan de un anuncio), es este `telefono` -el que el cliente
+    # escribió y que la tool acaba de guardar en Odoo- el único número real que hay.
+    # Sin esto, el aviso al supervisor (ver `_avisar_aprobacion`) cae de vuelta al
+    # chat_id y le manda un ID de YCloud en vez del teléfono del cliente.
+    if not c.telefono and telefono_final:
+        c.telefono = telefono_final
+    log.info("contacto_creado", chat_id=c.chat_id, partner_id=partner_id)
+    return f"OK: contacto creado, partner_id={partner_id}"
+
+
+async def actualizar_contacto_impl(
+    c: ConversationContext,
+    nombre: str = "",
+    calle: str = "",
+    referencia: str = "",
+    ciudad: str = "",
+    telefono: str = "",
+) -> str:
+    """La lógica de `actualizar_contacto`, sin el envoltorio del SDK (ver
+    `crear_contacto_impl`: mismo motivo para el split)."""
+    if not c.partner_id:
+        return "ERROR: primero llama a verificar_contacto o crear_contacto."
+    valores = {
+        k: v.strip()
+        for k, v in {
+            "name": nombre,
+            "street": calle,
+            "street2": referencia,
+            "city": ciudad,
+            "phone": telefono,
+        }.items()
+        if v and v.strip()
+    }
+    if not valores:
+        return "Nada que actualizar."
+    await odoo.write("res.partner", c.partner_id, valores)
+    # Mismo motivo que en crear_contacto: si esta llamada corrige/agrega el teléfono,
+    # el aviso al supervisor tiene que verlo (si no, cae al chat_id).
+    if valores.get("phone"):
+        c.telefono = valores["phone"]
+    return f"OK: contacto {c.partner_id} actualizado ({', '.join(valores)})."
+
+
 @function_tool
 async def crear_contacto(
     ctx: RunContextWrapper[ConversationContext],
@@ -167,36 +253,9 @@ async def crear_contacto(
         telefono: Teléfono que dio el cliente. Sólo si no tenemos el de WhatsApp.
         email: Correo, si lo dio.
     """
-    c = ctx.context
-    # CANDADO: el contacto queda en Odoo para siempre; no se crea con el alias de
-    # WhatsApp ni con emojis. Si no se lo preguntaste al cliente, pregúntaselo.
-    motivo = nombre_no_valido(nombre, c.user_name)
-    if motivo:
-        log.warning(
-            "contacto_nombre_rechazado",
-            chat_id=c.chat_id, nombre=nombre[:40], motivo=motivo,
-        )
-        c.marcar_revision("nombre_invalido")
-        return (
-            f"ERROR: {motivo}. PREGÚNTALE al cliente su nombre completo (ej: "
-            '"¿A nombre de quién registro el pedido?") y vuelve a intentarlo con '
-            "lo que te responda. NO uses el nombre de WhatsApp."
-        )
-    valores = {
-        "name": nombre.strip(),
-        "street": calle.strip(),
-        "street2": referencia.strip(),
-        "city": ciudad.strip(),
-        "zip": "",
-        "country_id": settings.odoo_country_id,
-        "phone": c.telefono or telefono.strip(),
-        "email": email.strip(),
-    }
-    valores = {k: v for k, v in valores.items() if v not in ("", None)}
-    partner_id = await odoo.create("res.partner", valores)
-    c.partner_id = partner_id
-    log.info("contacto_creado", chat_id=c.chat_id, partner_id=partner_id)
-    return f"OK: contacto creado, partner_id={partner_id}"
+    return await crear_contacto_impl(
+        ctx.context, nombre, calle, referencia, ciudad, telefono, email
+    )
 
 
 @function_tool
@@ -217,24 +276,9 @@ async def actualizar_contacto(
         ciudad: Ciudad o sector.
         telefono: Teléfono de contacto.
     """
-    c = ctx.context
-    if not c.partner_id:
-        return "ERROR: primero llama a verificar_contacto o crear_contacto."
-    valores = {
-        k: v.strip()
-        for k, v in {
-            "name": nombre,
-            "street": calle,
-            "street2": referencia,
-            "city": ciudad,
-            "phone": telefono,
-        }.items()
-        if v and v.strip()
-    }
-    if not valores:
-        return "Nada que actualizar."
-    await odoo.write("res.partner", c.partner_id, valores)
-    return f"OK: contacto {c.partner_id} actualizado ({', '.join(valores)})."
+    return await actualizar_contacto_impl(
+        ctx.context, nombre, calle, referencia, ciudad, telefono
+    )
 
 
 async def _faltante_del_comprobante(
